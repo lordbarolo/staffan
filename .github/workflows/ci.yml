@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: staffan
+          POSTGRES_PASSWORD: staffan
+          POSTGRES_USER: staffan
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U staffan -d staffan"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://staffan:staffan@localhost:5432/staffan
+      INTERNAL_API_URL: http://127.0.0.1:3001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm db:verify
+      - run: pnpm check
+      - name: Smoke production web to API
+        run: |
+          pnpm --filter @staffan/api start &
+          api_pid=$!
+          pnpm --filter @staffan/web start &
+          web_pid=$!
+          cleanup() { kill "$api_pid" "$web_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
+          curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
