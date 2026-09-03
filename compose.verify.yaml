@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: staffan
+      POSTGRES_PASSWORD: staffan
+      POSTGRES_USER: staffan
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staffan -d staffan"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - staffan-verify-postgres:/var/lib/postgresql/data
+
+  model-gateway:
+    image: node:24-alpine
+    command: ["node", "/opt/test-gateway.mjs"]
+    volumes:
+      - ./docker/test-gateway.mjs:/opt/test-gateway.mjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    build:
+      context: .
+      target: api
+    environment:
+      DATABASE_URL: postgres://staffan:staffan@postgres:5432/staffan
+    command: ["node", "packages/db/dist/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "3001"
+      DATABASE_URL: postgres://staffan:staffan@postgres:5432/staffan
+      MODEL_GATEWAY_URL: http://model-gateway:4100/extract
+      MODEL_NAME: deterministic-docker-test
+      MODEL_VERSION: "1"
+    ports:
+      - "3001:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      model-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      target: web
+    environment:
+      INTERNAL_API_URL: http://api:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  staffan-verify-postgres:

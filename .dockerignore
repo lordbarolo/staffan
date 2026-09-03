@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+.next
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+pnpm-debug.log*
+docs/*.pdf
+docs/~$*

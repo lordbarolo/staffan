@@ -38,6 +38,12 @@ pnpm build
 
 `pnpm db:up` startar PostgreSQL 16 via Docker Compose och väntar tills databasen är frisk. `pnpm db:migrate` applicerar Drizzle-migreringarna och `pnpm db:smoke` verifierar både anslutningen och det migrerade schemat.
 
+## Docker och modellgateway
+
+Produktions-API:t startar inte utan `MODEL_GATEWAY_URL`. Det är en avsiktlig spärr: en riktig modellkörning ska alltid peka på en explicit konfigurerad gateway. `MODEL_GATEWAY_TOKEN` kan anges när gatewayn kräver Bearer-autentisering.
+
+Docker-verifieringen körs med `docker compose -f compose.verify.yaml up --build --detach` följt av health- och intake-kontrollerna i CI. Den bygger API och webb, migrerar en ren PostgreSQL-instans och använder en separat deterministisk testgateway för att verifiera hela intake-flödet utan externa modellcredentials. Denna testgateway är inte en produktionsmodell.
+
 ## Konfiguration och secrets
 
 `.env.example` innehåller enbart lokala utvecklingsvärden. `.env` och alla miljöspecifika varianter ignoreras av Git. Riktiga credentials ska tillföras som miljövariabler av körmiljön och får inte läggas i repo, loggar eller klientexponerade `NEXT_PUBLIC_*`-variabler.
