@@ -63,6 +63,7 @@ const server = createServer(async (request, response) => {
         preferences: [],
         criteria: [],
         priorities: [],
+        requiredDocuments: [],
         commercialTerms: null,
         submissionDeadline: null,
         otherTerms: [],

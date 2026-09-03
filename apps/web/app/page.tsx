@@ -101,7 +101,7 @@ function ReviewPanel({ review }: { review: Review }) {
             <Field name="requesterName" label="Beställare" value={nestedValue(values, "requester", "name")} />
             <Field name="requesterPhone" label="Beställarens telefon" value={nestedValue(values, "requester", "phone")} />
           </div>
-          <Field name="requesterEmail" label="Beställarens e-post" type="email" value={nestedValue(values, "requester", "email")} />
+          <TextArea name="requesterEmails" label="Beställarens e-post, en per rad" value={nestedLinesValue(values, "requester", "emails")} />
           <Field name="role" label="Roll" value={value(values, "role")} required />
           <Field name="specialty" label="Specialitet" value={value(values, "specialty")} />
           <Field name="location" label="Plats" value={value(values, "location")} required />
@@ -121,6 +121,7 @@ function ReviewPanel({ review }: { review: Review }) {
           <TextArea name="preferences" label="Önskemål, ett per rad" value={linesValue(values, "preferences")} />
           <TextArea name="criteria" label="Kriterier, ett per rad" value={linesValue(values, "criteria")} />
           <TextArea name="priorities" label="Prioriteringar, ett per rad" value={linesValue(values, "priorities")} />
+          <TextArea name="requiredDocuments" label="Bilagekrav, ett per rad" value={linesValue(values, "requiredDocuments")} />
           <TextArea name="commercialTerms" label="Kommersiella villkor" value={value(values, "commercialTerms")} />
           <Field name="submissionDeadline" label="Sista svarsdatum" type="date" value={value(values, "submissionDeadline")} required />
           <TextArea name="otherTerms" label="Övriga villkor, ett per rad" value={linesValue(values, "otherTerms")} />
@@ -160,6 +161,13 @@ function nestedValue(record: Record<string, unknown> | null, key: string, nested
   if (typeof current !== "object" || current === null) return "";
   const nested = (current as Record<string, unknown>)[nestedKey];
   return typeof nested === "string" || typeof nested === "number" ? String(nested) : "";
+}
+
+function nestedLinesValue(record: Record<string, unknown> | null, key: string, nestedKey: string) {
+  const current = record?.[key];
+  if (typeof current !== "object" || current === null) return "";
+  const nested = (current as Record<string, unknown>)[nestedKey];
+  return Array.isArray(nested) ? nested.filter((item): item is string => typeof item === "string").join("\n") : "";
 }
 
 async function getReview(id: string): Promise<Review | null> {

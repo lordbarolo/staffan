@@ -70,6 +70,7 @@ export async function approveCallOff(formData: FormData) {
       preferences: lines(formData.get("preferences")),
       criteria: lines(formData.get("criteria")),
       priorities: lines(formData.get("priorities")),
+      requiredDocuments: lines(formData.get("requiredDocuments")),
       commercialTerms: optionalText(formData.get("commercialTerms")),
       submissionDeadline: optionalText(formData.get("submissionDeadline")),
       otherTerms: lines(formData.get("otherTerms")),
@@ -118,9 +119,9 @@ function requester(formData: FormData) {
   const result = {
     name: optionalText(formData.get("requesterName")),
     phone: optionalText(formData.get("requesterPhone")),
-    email: optionalText(formData.get("requesterEmail")),
+    emails: lines(formData.get("requesterEmails")),
   };
-  return Object.values(result).every((value) => value === null) ? null : result;
+  return result.name === null && result.phone === null && result.emails.length === 0 ? null : result;
 }
 
 function scope(formData: FormData) {

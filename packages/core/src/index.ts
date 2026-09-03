@@ -21,7 +21,7 @@ export const callOffFieldsSchema = z.object({
     .object({
       name: z.string().min(1).max(200).nullable(),
       phone: z.string().min(1).max(100).nullable(),
-      email: z.email().nullable(),
+      emails: z.array(z.email()).max(20),
     })
     .nullable(),
   role: z.string().min(1).max(200).nullable(),
@@ -43,6 +43,7 @@ export const callOffFieldsSchema = z.object({
   preferences: z.array(z.string().min(1).max(1_000)).max(100),
   criteria: z.array(z.string().min(1).max(1_000)).max(100),
   priorities: z.array(z.string().min(1).max(1_000)).max(100),
+  requiredDocuments: z.array(z.string().min(1).max(1_000)).max(100),
   commercialTerms: z.string().min(1).max(2_000).nullable(),
   submissionDeadline: isoDate.nullable(),
   otherTerms: z.array(z.string().min(1).max(1_000)).max(100),

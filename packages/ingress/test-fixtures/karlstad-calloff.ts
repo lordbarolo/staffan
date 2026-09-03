@@ -43,7 +43,7 @@ export function expectedKarlstadExtraction(artifactId: string): CallOffExtractio
     requester: {
       name: "Test Beställare",
       phone: "000-000 00 00",
-      email: "test@example.invalid",
+      emails: ["test@example.invalid"],
     },
     role: "Legitimerad sjuksköterska",
     specialty: null,
@@ -64,6 +64,7 @@ export function expectedKarlstadExtraction(artifactId: string): CallOffExtractio
     priorities: [
       "Kontinuitet prioriteras: begränsa antalet konsulter i uppdraget och låt samma sjuksköterskor återkomma kontinuerligt",
     ],
+    requiredDocuments: [],
     commercialTerms: null,
     submissionDeadline: "2026-01-25",
     otherTerms: [
