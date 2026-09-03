@@ -10,8 +10,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/multipart": "10.1.1",
+    "@staffan/core": "workspace:*",
     "@staffan/db": "workspace:*",
+    "@staffan/ingress": "workspace:*",
     "fastify": "5.12.1",
+    "pdf-parse": "2.4.5",
     "zod": "4.5.4"
   },
   "devDependencies": {

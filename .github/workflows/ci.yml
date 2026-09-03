@@ -25,6 +25,7 @@ jobs:
     env:
       DATABASE_URL: postgres://staffan:staffan@localhost:5432/staffan
       INTERNAL_API_URL: http://127.0.0.1:3001
+      MODEL_GATEWAY_URL: http://127.0.0.1:4100/extract
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -48,3 +49,24 @@ jobs:
           trap cleanup EXIT
           curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
           curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
+
+  docker:
+    name: Docker verification
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the full Docker stack
+        run: docker compose -f compose.verify.yaml up --build --detach
+      - name: Verify containerized health and model intake
+        run: |
+          set -euo pipefail
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
+            -H 'content-type: application/json' \
+            -d '{"content":"Docker-verifiering","sourceSystem":"ci"}' \
+            http://127.0.0.1:3001/call-offs/import-text | grep 'ready_for_review'
+      - name: Tear down Docker stack
+        if: always()
+        run: docker compose -f compose.verify.yaml down --volumes --remove-orphans

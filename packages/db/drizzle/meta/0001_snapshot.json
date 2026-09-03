@@ -1,0 +1,93 @@
+{
+  "id": "6e5358c4-17e9-4891-944b-f2d620625e04",
+  "prevId": "e65c6a6a-026b-4bc8-99d9-b5487e5df6a2",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.app_metadata": {
+      "name": "app_metadata",
+      "schema": "",
+      "columns": {
+        "key": { "name": "key", "type": "text", "primaryKey": true, "notNull": true },
+        "updated_at": { "name": "updated_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" },
+        "value": { "name": "value", "type": "text", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {}, "foreignKeys": {}, "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {}, "checkConstraints": {}, "isRLSEnabled": false
+    },
+    "public.raw_artifacts": {
+      "name": "raw_artifacts",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+        "source_type": { "name": "source_type", "type": "text", "primaryKey": false, "notNull": true },
+        "source_system": { "name": "source_system", "type": "text", "primaryKey": false, "notNull": true },
+        "external_ref": { "name": "external_ref", "type": "text", "primaryKey": false, "notNull": false },
+        "file_name": { "name": "file_name", "type": "text", "primaryKey": false, "notNull": false },
+        "media_type": { "name": "media_type", "type": "text", "primaryKey": false, "notNull": true },
+        "content": { "name": "content", "type": "text", "primaryKey": false, "notNull": true },
+        "sha256": { "name": "sha256", "type": "text", "primaryKey": false, "notNull": true },
+        "received_at": { "name": "received_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {}, "foreignKeys": {}, "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {}, "checkConstraints": {}, "isRLSEnabled": false
+    },
+    "public.call_off_extractions": {
+      "name": "call_off_extractions",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+        "artifact_id": { "name": "artifact_id", "type": "text", "primaryKey": false, "notNull": true },
+        "extraction": { "name": "extraction", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "issues": { "name": "issues", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "model_provider": { "name": "model_provider", "type": "text", "primaryKey": false, "notNull": true },
+        "model_name": { "name": "model_name", "type": "text", "primaryKey": false, "notNull": true },
+        "model_version": { "name": "model_version", "type": "text", "primaryKey": false, "notNull": true },
+        "status": { "name": "status", "type": "text", "primaryKey": false, "notNull": true },
+        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "call_off_extractions_artifact_id_raw_artifacts_id_fk": {
+          "name": "call_off_extractions_artifact_id_raw_artifacts_id_fk",
+          "tableFrom": "call_off_extractions", "tableTo": "raw_artifacts",
+          "columnsFrom": ["artifact_id"], "columnsTo": ["id"],
+          "onDelete": "no action", "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {}, "checkConstraints": {}, "isRLSEnabled": false
+    },
+    "public.call_offs": {
+      "name": "call_offs",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
+        "artifact_id": { "name": "artifact_id", "type": "text", "primaryKey": false, "notNull": true },
+        "extraction_id": { "name": "extraction_id", "type": "text", "primaryKey": false, "notNull": true },
+        "status": { "name": "status", "type": "text", "primaryKey": false, "notNull": true },
+        "fields": { "name": "fields", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "extraction_confidence": { "name": "extraction_confidence", "type": "real", "primaryKey": false, "notNull": true },
+        "field_confidence": { "name": "field_confidence", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "field_provenance": { "name": "field_provenance", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true },
+        "updated_at": { "name": "updated_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "call_offs_artifact_id_raw_artifacts_id_fk": {
+          "name": "call_offs_artifact_id_raw_artifacts_id_fk",
+          "tableFrom": "call_offs", "tableTo": "raw_artifacts",
+          "columnsFrom": ["artifact_id"], "columnsTo": ["id"],
+          "onDelete": "no action", "onUpdate": "no action"
+        },
+        "call_offs_extraction_id_call_off_extractions_id_fk": {
+          "name": "call_offs_extraction_id_call_off_extractions_id_fk",
+          "tableFrom": "call_offs", "tableTo": "call_off_extractions",
+          "columnsFrom": ["extraction_id"], "columnsTo": ["id"],
+          "onDelete": "no action", "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {}, "checkConstraints": {}, "isRLSEnabled": false
+    }
+  },
+  "enums": {}, "schemas": {}, "sequences": {}, "roles": {}, "policies": {}, "views": {},
+  "_meta": { "columns": {}, "schemas": {}, "tables": {} }
+}
