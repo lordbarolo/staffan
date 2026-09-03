@@ -61,9 +61,9 @@ jobs:
       - name: Verify containerized health and model intake
         run: |
           set -euo pipefail
-          curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
-          curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
-          curl --fail --retry 20 --retry-connrefused --retry-delay 1 \
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
             -H 'content-type: application/json' \
             -d '{"content":"Docker-verifiering","sourceSystem":"ci"}' \
             http://127.0.0.1:3001/call-offs/import-text | grep 'ready_for_review'
