@@ -17,9 +17,9 @@ Byggarbete börjar med [arkitekturlåset](docs/ARKITEKTUR-LAST-v1.0.md) och [byg
 ```bash
 cp .env.example .env
 pnpm install --frozen-lockfile
-pnpm dev:infra
+pnpm db:up
 pnpm db:migrate
-pnpm db:verify
+pnpm db:smoke
 pnpm dev
 ```
 
@@ -35,6 +35,8 @@ pnpm build
 ```
 
 `pnpm check` kör hela kedjan. CI migrerar dessutom en ren PostgreSQL-instans och verifierar hela produktionsvägen från operationsytan via health-endpointen till databasen.
+
+`pnpm db:up` startar PostgreSQL 16 via Docker Compose och väntar tills databasen är frisk. `pnpm db:migrate` applicerar Drizzle-migreringarna och `pnpm db:smoke` verifierar både anslutningen och det migrerade schemat.
 
 ## Konfiguration och secrets
 

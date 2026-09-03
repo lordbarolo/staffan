@@ -11,9 +11,9 @@
     "build": "pnpm --recursive build",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:migrate": "pnpm --filter @staffan/db migrate",
-    "db:verify": "pnpm --filter @staffan/db verify",
+    "db:smoke": "pnpm --filter @staffan/db verify",
+    "db:up": "docker compose up -d --wait postgres",
     "dev": "pnpm --filter @staffan/db build && pnpm --parallel --filter @staffan/api --filter @staffan/web dev",
-    "dev:infra": "docker compose up -d postgres",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "pnpm --filter @staffan/db build && pnpm --recursive typecheck"
