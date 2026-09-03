@@ -20,6 +20,8 @@
     "verify": "tsx src/verify.ts"
   },
   "dependencies": {
+    "@staffan/core": "workspace:*",
+    "@staffan/ingress": "workspace:*",
     "drizzle-orm": "0.45.2",
     "postgres": "3.4.9",
     "zod": "4.5.4"

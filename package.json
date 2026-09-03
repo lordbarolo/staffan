@@ -13,10 +13,10 @@
     "db:migrate": "pnpm --filter @staffan/db migrate",
     "db:smoke": "pnpm --filter @staffan/db verify",
     "db:up": "docker compose up -d --wait postgres",
-    "dev": "pnpm --filter @staffan/db build && pnpm --parallel --filter @staffan/api --filter @staffan/web dev",
+    "dev": "pnpm --filter @staffan/core build && pnpm --filter @staffan/ingress build && pnpm --filter @staffan/db build && pnpm --parallel --filter @staffan/api --filter @staffan/web dev",
     "lint": "eslint .",
     "test": "vitest run",
-    "typecheck": "pnpm --filter @staffan/db build && pnpm --recursive typecheck"
+    "typecheck": "pnpm --filter @staffan/core build && pnpm --filter @staffan/ingress build && pnpm --filter @staffan/db build && pnpm --recursive typecheck"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
