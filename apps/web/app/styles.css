@@ -60,7 +60,7 @@ h2 {
   line-height: 1.6;
 }
 
-section {
+.status-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -71,6 +71,42 @@ section {
   background: #ffffff;
   box-shadow: 0 20px 60px rgb(23 50 43 / 8%);
 }
+
+.notice,
+.intake,
+.review {
+  margin-top: 24px;
+  border: 1px solid #d8dfdb;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.notice { padding: 14px 18px; }
+.notice-error { color: #a13a2c; background: #fff0ed; }
+.notice-ok { color: #17633d; background: #e6f4eb; }
+
+.intake,
+.review { padding: 28px 30px; }
+.intake > div { margin-bottom: 24px; }
+form { display: grid; gap: 16px; }
+.pdf-form { margin-top: 24px; padding-top: 24px; border-top: 1px solid #d8dfdb; }
+label { display: grid; gap: 7px; color: #40544f; font-size: .875rem; font-weight: 650; }
+input,
+textarea,
+select { width: 100%; padding: 10px 12px; border: 1px solid #bdcac5; border-radius: 8px; background: #fff; color: #18312b; font: inherit; }
+textarea { resize: vertical; line-height: 1.5; }
+button { justify-self: start; padding: 11px 17px; border: 0; border-radius: 9px; background: #18312b; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+.review-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.review-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.review article,
+.review form { min-width: 0; }
+h3 { margin: 0 0 12px; font-size: 1rem; }
+pre { max-height: 850px; margin: 0; overflow: auto; padding: 18px; border-radius: 10px; background: #f3f5f2; white-space: pre-wrap; overflow-wrap: anywhere; font: .8rem/1.55 ui-monospace, monospace; }
+.issues { margin-bottom: 24px; padding: 14px 18px; border-radius: 10px; background: #fff5df; color: #76540e; }
+.issues ul { margin-bottom: 0; }
+.two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+small { color: #62736f; }
 
 .status {
   display: inline-flex;
@@ -106,7 +142,7 @@ section {
     padding: 56px 0;
   }
 
-  section {
+  .status-card {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -114,4 +150,7 @@ section {
   .status {
     white-space: normal;
   }
+
+  .review-grid { grid-template-columns: 1fr; }
+  .review-heading { align-items: flex-start; flex-direction: column; }
 }
