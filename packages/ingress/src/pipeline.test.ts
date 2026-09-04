@@ -1,9 +1,12 @@
 import { callOffSchema, type CallOffExtraction, type RawArtifact } from "@staffan/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   processCallOff,
   ConfiguredHttpModelGateway,
+  OpenAiModelGateway,
+  openAiCallOffExtractionSchema,
   parseApproval,
   type CallOffReviewRepository,
   type ExtractionRecord,
@@ -230,6 +233,34 @@ describe("quarantine and extraction pipeline", () => {
     expect(result.extraction.issues.length).toBeGreaterThan(0);
   });
 
+  it("keeps trusted portal metadata when the model returns conflicting values", async () => {
+    const repository = new MemoryRepository();
+    const result = await processCallOff(
+      {
+        content: "Avrop från e-Avrop",
+        externalRef: "135948",
+        fileName: "e-avrop-135948.txt",
+        mediaType: "text/plain",
+        sourceSystem: "e-avrop",
+        sourceType: "raw_text",
+      },
+      {
+        repository,
+        gateway: gatewayFor((artifactId) => ({
+          ...completeExtraction,
+          externalRef: null,
+          sourceSystem: "modellens-felaktiga-källa",
+          fieldProvenance: {
+            role: [{ artifactId, excerpt: "Avrop", locator: null }],
+          },
+        })),
+      },
+    );
+
+    expect(result.extraction.extraction?.externalRef).toBe("135948");
+    expect(result.extraction.extraction?.sourceSystem).toBe("e-avrop");
+  });
+
   it("sends every document through one generic schema-based ModelGateway contract", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ output: { invalid: true } }), {
@@ -264,5 +295,74 @@ describe("quarantine and extraction pipeline", () => {
     });
     expect(JSON.stringify(body)).not.toContain("Karlstad");
     expect(JSON.stringify(body)).not.toContain("Eslöv");
+  });
+
+  it("keeps the OpenAI provider behind the same ModelGateway contract", async () => {
+    let observed:
+      | {
+          apiKey: string;
+          artifactId: string;
+          content: string;
+          model: string;
+          sourceType: string;
+        }
+      | undefined;
+    const gateway = new OpenAiModelGateway(
+      "test-key",
+      "gpt-5.4-mini-2026-03-17",
+      "2026-03-17",
+      {
+        generate: async (input) => {
+          observed = {
+            apiKey: input.apiKey,
+            artifactId: input.artifactId,
+            content: input.content,
+            model: input.model,
+            sourceType: input.sourceType,
+          };
+          return { valid: "schema validation remains in processCallOff" };
+        },
+      },
+    );
+
+    const output = await gateway.extractCallOff({
+      artifactId: "00000000-0000-4000-8000-000000000001",
+      content: "Opålitlig extern avropstext",
+      sourceType: "raw_text",
+    });
+
+    expect(output).toEqual({ valid: "schema validation remains in processCallOff" });
+    expect(gateway.identity).toEqual({
+      provider: "openai",
+      name: "gpt-5.4-mini-2026-03-17",
+      version: "2026-03-17",
+    });
+    expect(observed).toEqual({
+      apiKey: "test-key",
+      artifactId: "00000000-0000-4000-8000-000000000001",
+      content: "Opålitlig extern avropstext",
+      model: "gpt-5.4-mini-2026-03-17",
+      sourceType: "raw_text",
+    });
+  });
+
+  it("uses a simple OpenAI response schema and leaves strict validation to the domain parser", () => {
+    const jsonSchema = z.toJSONSchema(openAiCallOffExtractionSchema);
+    const serialized = JSON.stringify(jsonSchema);
+
+    for (const keyword of [
+      "propertyNames",
+      "format",
+      "pattern",
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+      "minimum",
+      "maximum",
+      "exclusiveMinimum",
+    ]) {
+      expect(serialized).not.toContain(`"${keyword}"`);
+    }
   });
 });

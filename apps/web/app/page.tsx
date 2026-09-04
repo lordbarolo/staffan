@@ -1,5 +1,5 @@
 import { getHealth } from "./health";
-import { approveCallOff, importPdf, importText } from "./actions";
+import { approveCallOff, importEavrop, importPdf, importText } from "./actions";
 
 interface Review {
   artifact: {
@@ -50,8 +50,13 @@ export default async function OperationsPage({
       <section className="intake" aria-labelledby="new-calloff">
         <div>
           <p className="eyebrow">Nytt underlag</p>
-          <h2 id="new-calloff">Text eller PDF</h2>
+          <h2 id="new-calloff">e-Avrop, text eller PDF</h2>
         </div>
+        <form action={importEavrop} className="portal-form">
+          <label>e-Avrop-länk<input name="url" type="url" placeholder="https://www.e-avrop.com/..." required /></label>
+          <button type="submit">Hämta från e-Avrop</button>
+          <small>Staffan loggar in, hämtar avropstext och bilagor och skickar materialet till samma granskning som övriga källor.</small>
+        </form>
         <form action={importText}>
           <label>Extern referens<input name="externalRef" /></label>
           <label>Inklistrad avropstext<textarea name="content" rows={9} required /></label>

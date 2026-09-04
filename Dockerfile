@@ -13,7 +13,12 @@ RUN pnpm build
 FROM node:24-bookworm-slim AS api
 
 ENV NODE_ENV=production
+ENV EAVROP_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps ./apps

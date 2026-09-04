@@ -44,6 +44,21 @@ export async function importPdf(formData: FormData) {
   redirect(destination);
 }
 
+export async function importEavrop(formData: FormData) {
+  let destination: string;
+  try {
+    const response = await fetch(`${apiUrl}/call-offs/import-eavrop`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: requiredText(formData.get("url")) }),
+    });
+    destination = await intakeDestination(response);
+  } catch (error) {
+    destination = errorDestination(error);
+  }
+  redirect(destination);
+}
+
 export async function approveCallOff(formData: FormData) {
   const extractionId = z.uuid().parse(formData.get("extractionId"));
   let destination: string;

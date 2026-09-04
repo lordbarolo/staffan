@@ -89,6 +89,7 @@ h2 {
 .review { padding: 28px 30px; }
 .intake > div { margin-bottom: 24px; }
 form { display: grid; gap: 16px; }
+.portal-form { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #d8dfdb; }
 .pdf-form { margin-top: 24px; padding-top: 24px; border-top: 1px solid #d8dfdb; }
 label { display: grid; gap: 7px; color: #40544f; font-size: .875rem; font-weight: 650; }
 input,

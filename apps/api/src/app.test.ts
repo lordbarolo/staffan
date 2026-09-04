@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallOffApproval, RawArtifact } from "@staffan/core";
 import type { ExtractionRecord } from "@staffan/ingress";
+import ExcelJS from "exceljs";
 
 import { expectedKarlstadExtraction, karlstadRawText } from "../../../packages/ingress/test-fixtures/karlstad-calloff.js";
 
-import { buildApp, type CallOffApiRepository } from "./app.js";
+import { buildApp, eavropContent, type CallOffApiRepository } from "./app.js";
 
 const openApps: ReturnType<typeof buildApp>[] = [];
 
@@ -40,6 +41,117 @@ describe("GET /health", () => {
 });
 
 describe("CallOff intake API", () => {
+  it("extracts spreadsheet text even when e-Avrop reports an unknown media type", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Behov");
+    sheet.addRow(["Roll", "Sjuksköterska"]);
+    sheet.addRow(["Omfattning", "100 %"]);
+    const content = new Uint8Array(await workbook.xlsx.writeBuffer());
+
+    const result = await eavropContent({
+      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=42",
+      externalRef: "42",
+      pageText: "Avrop",
+      attachments: [
+        {
+          sourceUrl: "https://www.e-avrop.com/AttachmentDispatcher.aspx?id=1",
+          fileName: "Anbudsinbjudan.xlsx",
+          mediaType: "application/octet-stream",
+          content,
+        },
+      ],
+      log: [],
+    });
+
+    expect(result).toContain("Arbetsblad: Behov");
+    expect(result).toContain("Roll\tSjuksköterska");
+    expect(result).toContain("Omfattning\t100 %");
+  });
+
+  it("imports an e-Avrop link through the existing review pipeline", async () => {
+    const artifacts: RawArtifact[] = [];
+    const repository: CallOffApiRepository = {
+      async saveArtifact(artifact) {
+        artifacts.push(artifact);
+      },
+      saveExtraction: vi.fn(),
+      listReviews: vi.fn().mockResolvedValue([]),
+      getReview: vi.fn().mockResolvedValue(null),
+      approve: vi.fn(),
+    };
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository,
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        async extractCallOff(input) {
+          return expectedKarlstadExtraction(input.artifactId);
+        },
+      },
+      eavrop: {
+        async fetchCallOff(sourceUrl) {
+          return {
+            sourceUrl,
+            externalRef: "AV-42",
+            pageText: "Avrop om sjuksköterska i Karlstad",
+            attachments: [
+              {
+                sourceUrl: "https://www.e-avrop.com/files/schema.txt",
+                fileName: "schema.txt",
+                mediaType: "text/plain",
+                content: new TextEncoder().encode("Schema: dag och kväll"),
+              },
+            ],
+            log: [
+              { step: "navigate", status: "ok", detail: "Avropslänken öppnades" },
+            ],
+          };
+        },
+      },
+    });
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/call-offs/import-eavrop",
+      payload: { url: "https://www.e-avrop.com/notice.aspx?id=42" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().portal).toMatchObject({ attachmentCount: 1 });
+    expect(artifacts[0]).toMatchObject({
+      externalRef: "AV-42",
+      sourceSystem: "e-avrop",
+      sourceType: "raw_text",
+    });
+    expect(artifacts[0]?.content).toContain("Schema: dag och kväll");
+  });
+
+  it("reports a disabled e-Avrop adapter explicitly", async () => {
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository: {
+        saveArtifact: vi.fn(),
+        saveExtraction: vi.fn(),
+        listReviews: vi.fn().mockResolvedValue([]),
+        getReview: vi.fn().mockResolvedValue(null),
+        approve: vi.fn(),
+      },
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        extractCallOff: vi.fn(),
+      },
+    });
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/call-offs/import-eavrop",
+      payload: { url: "https://www.e-avrop.com/notice.aspx?id=42" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "e-Avrop-integrationen är inte konfigurerad" });
+  });
+
   it("imports, reviews, corrects and approves a CallOff", async () => {
     const artifacts = new Map<string, RawArtifact>();
     const extractions = new Map<string, ExtractionRecord>();
