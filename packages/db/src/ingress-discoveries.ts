@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { EavropDiscoveredCallOff } from "@staffan/ingress";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 
-import { createDatabaseClient } from "./index.js";
+import { createDatabaseClient } from "./client.js";
 import { ingressDiscoveries } from "./schema.js";
 
 export type IngressDiscoveryStatus =

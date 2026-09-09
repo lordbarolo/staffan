@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { and, eq, gt } from "drizzle-orm";
 
-import { createDatabaseClient } from "./index.js";
+import { createDatabaseClient } from "./client.js";
 import { operatorSessions, operators } from "./schema.js";
 
 export interface OperatorIdentity {

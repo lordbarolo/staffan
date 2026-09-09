@@ -5,7 +5,7 @@ import { callOffApprovalSchema, type CallOff, type CallOffApproval, type RawArti
 import type { CallOffReviewRepository, ExtractionRecord } from "@staffan/ingress";
 import { desc, eq, isNotNull, isNull } from "drizzle-orm";
 
-import { createDatabaseClient } from "./index.js";
+import { createDatabaseClient } from "./client.js";
 import { callOffExtractions, callOffs, rawArtifacts } from "./schema.js";
 
 export class ApprovalConflictError extends Error {

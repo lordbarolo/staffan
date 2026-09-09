@@ -3,15 +3,15 @@ import { fileURLToPath } from "node:url";
 
 import { sql } from "drizzle-orm";
 
+import { createDatabaseClient } from "./client.js";
+import { readDatabaseUrl } from "./config.js";
 import {
   appMetadata,
   callOffs,
-  createDatabaseClient,
   ingressDiscoveries,
   operatorSessions,
   operators,
-  readDatabaseUrl,
-} from "./index.js";
+} from "./schema.js";
 
 const localEnvironmentPath = fileURLToPath(new URL("../../../.env", import.meta.url));
 if (existsSync(localEnvironmentPath)) process.loadEnvFile(localEnvironmentPath);
