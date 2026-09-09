@@ -1,44 +1,80 @@
 import multipart from "@fastify/multipart";
 import { callOffApprovalSchema } from "@staffan/core";
-import { checkDatabase, type ReviewRecord } from "@staffan/db";
+import {
+  ApprovalConflictError,
+  ApprovalValidationError,
+  checkDatabase,
+  type IngressDiscoveryRecord,
+  type OperatorIdentity,
+  type ReviewRecord,
+} from "@staffan/db";
 import {
   EavropAdapterError,
+  PdfTextExtractionError,
+  eavropContent,
+  extractPdfText,
   processCallOff,
   type CallOffReviewRepository,
   type EavropFetchResult,
   type EavropPortal,
   type IntakeResult,
   type ModelGateway,
+  type OcrEngine,
 } from "@staffan/ingress";
-import ExcelJS from "exceljs";
 import Fastify from "fastify";
-import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
 import { z } from "zod";
 
-const MAX_EXTRACTED_ATTACHMENT_CHARS = 200_000;
+import { SESSION_COOKIE_NAME, type AuthService } from "./auth.js";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    operator: OperatorIdentity | null;
+  }
+}
 
 export type DatabaseCheck = () => Promise<void>;
 
 export interface CallOffApiRepository extends CallOffReviewRepository {
-  approve(extractionId: string, fields: z.infer<typeof callOffApprovalSchema>): Promise<unknown>;
+  approve(
+    extractionId: string,
+    fields: z.infer<typeof callOffApprovalSchema>,
+    approvedByOperatorId: string,
+  ): Promise<unknown>;
   getReview(extractionId: string): Promise<ReviewRecord | null>;
   listReviews(): Promise<ReviewRecord[]>;
 }
 
 export interface CallOffDependencies {
+  discoveryRepository?: { list(limit?: number): Promise<IngressDiscoveryRecord[]> };
   eavrop?: EavropPortal;
   gateway: ModelGateway;
+  ocr?: OcrEngine;
   repository: CallOffApiRepository;
 }
 
 export function buildApp(
   databaseCheck: DatabaseCheck = checkDatabase,
   callOffDependencies?: CallOffDependencies,
+  auth?: { cookieSecure: boolean; service: AuthService },
 ) {
   const app = Fastify({ logger: false });
+  app.decorateRequest("operator", null);
 
   void app.register(multipart, { limits: { fileSize: 10_000_000, files: 1 } });
+
+  app.addHook("onRequest", async (request, reply) => {
+    const route = request.url.split("?", 1)[0];
+    if (route === "/health" || route === "/auth/login") return;
+    if (auth === undefined) {
+      return reply.status(503).send({ error: "Autentisering är inte konfigurerad" });
+    }
+    const token = readCookie(request.headers.cookie, SESSION_COOKIE_NAME);
+    const operator = token === null ? null : await auth.service.verify(token);
+    if (operator === null) {
+      return reply.status(401).send({ error: "Inloggning krävs" });
+    }
+    request.operator = operator;
+  });
 
   app.get("/health", async (_request, reply) => {
     try {
@@ -48,6 +84,37 @@ export function buildApp(
       app.log.error({ error }, "Database health check failed");
       return reply.status(503).send({ status: "error", database: "unavailable" });
     }
+  });
+
+  app.post("/auth/login", async (request, reply) => {
+    if (auth === undefined) {
+      return reply.status(503).send({ error: "Autentisering är inte konfigurerad" });
+    }
+    const credentials = z
+      .object({
+        password: z.string().min(1).max(1_000),
+        username: z.string().trim().min(1).max(100),
+      })
+      .parse(request.body);
+    const session = await auth.service.login(credentials.username, credentials.password);
+    if (session === null) {
+      return reply.status(401).send({ error: "Felaktigt användarnamn eller lösenord" });
+    }
+    reply.header("cache-control", "no-store");
+    reply.header(
+      "set-cookie",
+      sessionCookie(session.token, new Date(session.expiresAt), auth.cookieSecure),
+    );
+    return { expiresAt: session.expiresAt, operator: session.operator };
+  });
+
+  app.get("/auth/session", async (request) => ({ operator: request.operator }));
+
+  app.post("/auth/logout", async (request, reply) => {
+    const token = readCookie(request.headers.cookie, SESSION_COOKIE_NAME);
+    if (auth !== undefined && token !== null) await auth.service.logout(token);
+    reply.header("set-cookie", expiredSessionCookie(auth?.cookieSecure ?? true));
+    return { status: "signed_out" } as const;
   });
 
   app.get("/call-offs/reviews", async (_request, reply) => {
@@ -106,9 +173,10 @@ export function buildApp(
       return reply.status(400).send({ error: "En PDF-fil krävs" });
     }
     const data = await upload.toBuffer();
-    const parser = new PDFParse({ data });
     try {
-      const parsed = await parser.getText();
+      const parsed = await extractPdfText(data, {
+        ...(callOffDependencies.ocr === undefined ? {} : { ocr: callOffDependencies.ocr }),
+      });
       try {
         const result = await runIntake(
           {
@@ -125,8 +193,21 @@ export function buildApp(
         app.log.error({ error }, "Could not persist PDF intake");
         return reply.status(503).send({ error: "Databasen är inte tillgänglig" });
       }
-    } finally {
-      await parser.destroy();
+    } catch (error) {
+      if (error instanceof PdfTextExtractionError) {
+        return reply.status(422).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/call-offs/discoveries", async (_request, reply) => {
+    if (callOffDependencies?.discoveryRepository === undefined) return unavailable(reply);
+    try {
+      return await callOffDependencies.discoveryRepository.list();
+    } catch (error) {
+      app.log.error({ error }, "Could not list ingress discoveries");
+      return reply.status(503).send({ error: "Databasen är inte tillgänglig" });
     }
   });
 
@@ -151,7 +232,9 @@ export function buildApp(
     }
 
     try {
-      const content = await eavropContent(portalResult);
+      const content = await eavropContent(portalResult, {
+        ...(callOffDependencies.ocr === undefined ? {} : { ocr: callOffDependencies.ocr }),
+      });
       const result = await runIntake(
         {
           content,
@@ -181,8 +264,15 @@ export function buildApp(
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const fields = callOffApprovalSchema.parse(request.body);
     try {
-      return await callOffDependencies.repository.approve(id, fields);
+      if (request.operator === null) return reply.status(401).send({ error: "Inloggning krävs" });
+      return await callOffDependencies.repository.approve(id, fields, request.operator.id);
     } catch (error) {
+      if (error instanceof ApprovalConflictError) {
+        return reply.status(409).send({ error: error.message });
+      }
+      if (error instanceof ApprovalValidationError) {
+        return reply.status(400).send({ error: error.message });
+      }
       app.log.error({ error }, "Could not approve call-off");
       return reply.status(503).send({ error: "CallOff kunde inte sparas" });
     }
@@ -209,87 +299,37 @@ async function runIntake(
   return processCallOff(input, dependencies);
 }
 
-export async function eavropContent(result: EavropFetchResult) {
-  const sections = ["e-Avrop-sida", result.pageText];
-
-  for (const attachment of result.attachments) {
-    sections.push(`Bilaga: ${attachment.fileName}`);
-    try {
-      sections.push(limitAttachmentText(await extractAttachmentText(attachment)));
-    } catch {
-      sections.push(`[Bilagan ${attachment.fileName} kunde inte texttolkas]`);
-    }
-  }
-
-  return sections.filter((section) => section.trim() !== "").join("\n\n---\n\n");
-}
-
-async function extractAttachmentText(attachment: EavropFetchResult["attachments"][number]) {
-  const content = Buffer.from(attachment.content);
-  if (attachment.mediaType === "application/pdf" || /\.pdf$/i.test(attachment.fileName)) {
-    const parser = new PDFParse({ data: content });
-    try {
-      return (await parser.getText()).text.trim();
-    } finally {
-      await parser.destroy();
-    }
-  }
-  if (/\.docx$/i.test(attachment.fileName)) {
-    return (await mammoth.extractRawText({ buffer: content })).value.trim();
-  }
-  if (/\.xlsx$/i.test(attachment.fileName)) {
-    const workbook = new ExcelJS.Workbook();
-    const workbookBuffer = content as unknown as Parameters<typeof workbook.xlsx.load>[0];
-    await workbook.xlsx.load(workbookBuffer);
-    const lines: string[] = [];
-    workbook.eachSheet((sheet) => {
-      lines.push(`Arbetsblad: ${sheet.name}`);
-      sheet.eachRow({ includeEmpty: false }, (row) => {
-        const cells: string[] = [];
-        row.eachCell({ includeEmpty: false }, (cell) => {
-          const text = spreadsheetCellText(cell.value).replace(/\s+/g, " ").trim();
-          if (text !== "") cells.push(text);
-        });
-        if (cells.length > 0) lines.push(cells.join("\t"));
-      });
-    });
-    return lines.join("\n").trim();
-  }
-  if (/^(?:text\/|application\/(?:json|xml))/.test(attachment.mediaType)) {
-    return new TextDecoder().decode(attachment.content).trim();
-  }
-  return `[Hämtad bilaga i formatet ${attachment.mediaType}; ingen text kunde extraheras]`;
-}
-
-function spreadsheetCellText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value !== "object") return "";
-
-  const cell = value as Record<string, unknown>;
-  if (Array.isArray(cell.richText)) {
-    return cell.richText
-      .map((part) =>
-        typeof part === "object" && part !== null && "text" in part
-          ? String((part as { text: unknown }).text)
-          : "",
-      )
-      .join("");
-  }
-  for (const key of ["result", "text", "error"] as const) {
-    if (key in cell) return spreadsheetCellText(cell[key]);
-  }
-  return "";
-}
-
-function limitAttachmentText(value: string) {
-  if (value.length <= MAX_EXTRACTED_ATTACHMENT_CHARS) return value;
-  return `${value.slice(0, MAX_EXTRACTED_ATTACHMENT_CHARS)}\n[Bilagetexten har kortats]`;
-}
-
 function unavailable(reply: { status(code: number): { send(body: unknown): unknown } }) {
   return reply.status(503).send({ error: "CallOff-tjänsten är inte konfigurerad" });
+}
+
+function readCookie(header: string | undefined, name: string) {
+  if (header === undefined) return null;
+  for (const part of header.split(";")) {
+    const [cookieName, ...cookieValue] = part.trim().split("=");
+    if (cookieName === name) return cookieValue.join("=") || null;
+  }
+  return null;
+}
+
+function sessionCookie(token: string, expiresAt: Date, secure: boolean) {
+  return [
+    `${SESSION_COOKIE_NAME}=${token}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    `Expires=${expiresAt.toUTCString()}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function expiredSessionCookie(secure: boolean) {
+  return [
+    `${SESSION_COOKIE_NAME}=`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Max-Age=0",
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
 }

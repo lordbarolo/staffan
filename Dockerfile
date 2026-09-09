@@ -10,14 +10,14 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
-FROM node:24-bookworm-slim AS api
+FROM node:24-bookworm-slim AS service-runtime
 
 ENV NODE_ENV=production
 ENV EAVROP_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation \
+    && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/node_modules ./node_modules
@@ -25,8 +25,15 @@ COPY --from=build /app/apps ./apps
 COPY --from=build /app/packages ./packages
 
 USER node
+
+FROM service-runtime AS api
+
 EXPOSE 3001
 CMD ["node", "apps/api/dist/server.js"]
+
+FROM service-runtime AS worker
+
+CMD ["node", "apps/worker/dist/worker.js"]
 
 FROM node:24-bookworm-slim AS web
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveEavropExternalRef,
+  discoverEavropCallOffLinks,
   EavropAdapterError,
   isEavropAttachmentCandidate,
   PlaywrightEavropPortalAdapter,
@@ -60,5 +61,26 @@ describe("e-Avrop adapter boundaries", () => {
         "Mer om anbudsinlämning",
       ),
     ).toBe(false);
+  });
+
+  it("discovers only canonical call-off links and removes duplicates", () => {
+    expect(
+      discoverEavropCallOffLinks(
+        [
+          { href: "/unit/e-Upphandling/leverantor/Procurement.aspx?id=AV-101" },
+          { href: "/unit/e-Upphandling/leverantor/Procurement.aspx?id=AV-101#details" },
+          { href: "/unit/e-Upphandling/leverantor/Procurement.aspx" },
+          { href: "/AttachmentDispatcher.aspx?id=1" },
+          { href: "https://example.invalid/notice?id=2" },
+        ],
+        "https://www.e-avrop.com/unit/dashboard.aspx",
+      ),
+    ).toEqual([
+      {
+        externalRef: "AV-101",
+        sourceUrl:
+          "https://www.e-avrop.com/unit/e-Upphandling/leverantor/Procurement.aspx?id=AV-101",
+      },
+    ]);
   });
 });

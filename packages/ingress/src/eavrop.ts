@@ -24,7 +24,17 @@ export interface EavropAttachment {
 export interface EavropLogEntry {
   detail: string;
   status: "ok" | "skipped";
-  step: "navigate" | "login" | "extract" | "attachments";
+  step: "navigate" | "login" | "discover" | "extract" | "attachments";
+}
+
+export interface EavropDiscoveredCallOff {
+  externalRef: string | null;
+  sourceUrl: string;
+}
+
+export interface EavropDiscoveryResult {
+  callOffs: EavropDiscoveredCallOff[];
+  log: EavropLogEntry[];
 }
 
 export interface EavropFetchResult {
@@ -39,6 +49,10 @@ export interface EavropPortal {
   fetchCallOff(sourceUrl: string): Promise<EavropFetchResult>;
 }
 
+export interface EavropPollingPortal extends EavropPortal {
+  discoverCallOffs(sourceUrl: string): Promise<EavropDiscoveryResult>;
+}
+
 export class EavropAdapterError extends Error {
   constructor(
     message: string,
@@ -48,7 +62,8 @@ export class EavropAdapterError extends Error {
       | "navigation_failed"
       | "authentication_failed"
       | "interaction_required"
-      | "empty_calloff",
+      | "empty_calloff"
+      | "discovery_failed",
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -167,6 +182,56 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
       await browser?.close();
     }
   }
+
+  async discoverCallOffs(sourceUrl: string): Promise<EavropDiscoveryResult> {
+    const requestedUrl = validateEavropUrl(sourceUrl);
+    const log: EavropLogEntry[] = [];
+    let browser: Browser | undefined;
+
+    try {
+      browser = await chromium.launch(browserLaunchOptions(this.options));
+      const page = await (await browser.newContext({ acceptDownloads: false, locale: "sv-SE" })).newPage();
+      page.setDefaultTimeout(this.timeoutMs);
+      page.setDefaultNavigationTimeout(this.timeoutMs);
+
+      await navigate(page, requestedUrl);
+      log.push({ step: "navigate", status: "ok", detail: "Bevakningssidan öppnades" });
+      if (await loginIsVisible(page)) {
+        await login(page, this.credentials, this.timeoutMs);
+        log.push({ step: "login", status: "ok", detail: "Inloggningen slutfördes" });
+        if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
+          await navigate(page, requestedUrl);
+        }
+      } else {
+        log.push({ step: "login", status: "skipped", detail: "Sidan krävde ingen ny inloggning" });
+      }
+
+      validateEavropUrl(page.url());
+      const links = await page.locator("a[href]").evaluateAll((elements) =>
+        elements.map((element) => ({ href: element.getAttribute("href") ?? "" })),
+      );
+      const callOffs = discoverEavropCallOffLinks(links, page.url());
+      log.push({
+        step: "discover",
+        status: callOffs.length === 0 ? "skipped" : "ok",
+        detail:
+          callOffs.length === 0
+            ? "Inga nya avropslänkar hittades"
+            : `${callOffs.length} avropslänkar hittades`,
+      });
+      return { callOffs, log };
+    } catch (error) {
+      if (error instanceof EavropAdapterError) throw error;
+      throw new EavropAdapterError(
+        "e-Avrops bevakningssida kunde inte läsas",
+        "discover",
+        "discovery_failed",
+        { cause: error },
+      );
+    } finally {
+      await browser?.close();
+    }
+  }
 }
 
 export function validateEavropUrl(value: string): string {
@@ -205,6 +270,40 @@ export function deriveEavropExternalRef(value: string): string | null {
   }
   const segment = url.pathname.split("/").filter(Boolean).at(-1);
   return segment === undefined || /^default\.aspx$/i.test(segment) ? null : segment.slice(0, 200);
+}
+
+export function discoverEavropCallOffLinks(
+  links: Array<{ href: string }>,
+  baseUrl: string,
+): EavropDiscoveredCallOff[] {
+  const discovered = new Map<string, EavropDiscoveredCallOff>();
+  for (const link of links) {
+    try {
+      const sourceUrl = validateEavropUrl(new URL(link.href, baseUrl).href);
+      if (!isEavropCallOffUrl(sourceUrl)) continue;
+      discovered.set(sourceUrl, {
+        externalRef: deriveEavropExternalRef(sourceUrl),
+        sourceUrl,
+      });
+    } catch {
+      // Other hosts, javascript controls and malformed links are not portal discoveries.
+    }
+  }
+  return [...discovered.values()];
+}
+
+export function isEavropCallOffUrl(value: string) {
+  const url = new URL(validateEavropUrl(value));
+  const target = `${url.pathname}?${url.searchParams.toString()}`;
+  if (/login\.aspx|attachmentdispatcher|invitationinfo|\/information\//i.test(target)) return false;
+  const hasStableReference = [...url.searchParams].some(
+    ([key, candidate]) =>
+      /^(?:id|noticeid|upphandlingid|procurementid|contractid)$/i.test(key) &&
+      candidate.trim() !== "",
+  );
+  const hasCallOffPath = /\/(?:calloff|notice|tender)\//i.test(url.pathname);
+  return /procurement|notice|upphandling|calloff|tender/i.test(target) &&
+    (hasStableReference || hasCallOffPath);
 }
 
 function browserLaunchOptions(options: EavropPortalAdapterOptions) {

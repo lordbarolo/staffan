@@ -15,5 +15,18 @@ services:
     volumes:
       - staffan-postgres:/var/lib/postgresql/data
 
+  worker:
+    profiles: ["eavrop"]
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://staffan:staffan@postgres:5432/staffan
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   staffan-postgres:

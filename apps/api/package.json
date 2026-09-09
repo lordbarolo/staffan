@@ -14,10 +14,7 @@
     "@staffan/core": "workspace:*",
     "@staffan/db": "workspace:*",
     "@staffan/ingress": "workspace:*",
-    "exceljs": "4.4.0",
     "fastify": "5.12.1",
-    "mammoth": "1.12.2",
-    "pdf-parse": "2.4.5",
     "zod": "4.5.4"
   },
   "devDependencies": {

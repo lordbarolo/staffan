@@ -8,7 +8,7 @@ Byggarbete börjar med [arkitekturlåset](docs/ARKITEKTUR-LAST-v1.0.md) och [byg
 
 ## Förutsättningar
 
-- Node.js 22 eller senare
+- Node.js 22.12 eller senare
 - pnpm 11.25.0 via Corepack (`corepack enable`)
 - Docker med Compose för lokal PostgreSQL 16
 
@@ -17,11 +17,14 @@ Byggarbete börjar med [arkitekturlåset](docs/ARKITEKTUR-LAST-v1.0.md) och [byg
 ```bash
 cp .env.example .env
 pnpm install --frozen-lockfile
+pnpm auth:hash-password
 pnpm db:up
 pnpm db:migrate
 pnpm db:smoke
 pnpm dev
 ```
+
+Kopiera den genererade hashsträngen till `OPERATOR_PASSWORD_HASH` i lokal `.env`. Själva lösenordet lagras inte i filen, koden eller Git.
 
 Öppna `http://localhost:3000`. Operationsytan läser API:ts `GET /health`; en frisk installation visar både API och databas som tillgängliga.
 
@@ -48,11 +51,21 @@ Docker-verifieringen körs med `docker compose -f compose.verify.yaml up --build
 
 ## e-Avrop
 
-Operationsytan kan importera en direktlänk till ett avrop på `e-avrop.com`. API:t loggar in med `EAVROP_USERNAME` och `EAVROP_PASSWORD`, hämtar sidtext och direktlänkade bilagor och skickar det sammanslagna materialet genom samma karantän-, modell- och reviewflöde som manuella underlag.
+Operationsytan kan importera en direktlänk till ett avrop på `e-avrop.com`. API:t loggar in med `EAVROP_USERNAME` och `EAVROP_PASSWORD`, hämtar sidtext och direktlänkade bilagor och skickar det sammanslagna materialet genom samma karantän-, modell- och reviewflöde som manuella underlag. PDF-sidor utan tillräcklig maskintext renderas och OCR-tolkas med Tesseract (`swe+eng`); redan läsbara sidor OCR-tolkas inte.
 
 Playwright använder installerad Chrome eller Edge automatiskt på Windows. API:ts Docker-image installerar Chromium och anger `EAVROP_BROWSER_EXECUTABLE_PATH`; motsvarande sökväg kan anges i andra körmiljöer. Portalinloggningen är endast läsande; adaptern skickar inga anbud och ändrar inga uppgifter i e-Avrop.
 
+Den separata workern i `apps/worker` använder pg-boss och PostgreSQL för att bevaka en explicit `EAVROP_POLL_URL`, deduplicera upptäckta avrop och köa import med begränsade återförsök. Starta den lokalt med `pnpm --filter @staffan/worker dev` efter migration och konfiguration. Varje lyckad import hamnar i granskningskön; workern godkänner aldrig ett CallOff.
+
 Se [`docs/EAVROP-INTEGRATION.md`](docs/EAVROP-INTEGRATION.md) för flöde, konfiguration utan hemligheter, verifierad omfattning och kända begränsningar.
+
+## Operatörsinloggning
+
+Operationsytan kräver en server-side session innan avropsdata kan läsas eller ändras. API:t lämnar endast `GET /health` och den nödvändiga inloggningsrutten publika. Sessionsvärdet ligger i en `HttpOnly`, `SameSite=Strict`-cookie medan endast dess SHA-256-hash lagras i PostgreSQL. Godkända CallOff-rader sparar operatörens databas-id.
+
+Den lokala operatören konfigureras med `OPERATOR_USERNAME` och en scrypt-hash i `OPERATOR_PASSWORD_HASH`. Kör `pnpm auth:hash-password` i en interaktiv terminal; kommandot visar inte lösenordet och skriver endast ut hashen. `AUTH_COOKIE_SECURE=false` är enbart för lokal HTTP. Värdet måste vara `true` vid HTTPS-drift eller innan systemet delas.
+
+Detta är medvetet en enoperatörslösning för aktuell lokal slice. Fler användare, extern drift eller persondataåtkomst kräver organisation/tenant-scope och en andra isoleringslinje i databasen enligt arkitekturlåset.
 
 ## Konfiguration och secrets
 

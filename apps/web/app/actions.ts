@@ -4,13 +4,14 @@ import { callOffApprovalSchema } from "@staffan/core";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
-const apiUrl = process.env.INTERNAL_API_URL ?? "http://127.0.0.1:3001";
+import { authenticatedApiFetch, AuthenticationRequiredError } from "./auth";
+
 const intakeResponseSchema = z.object({ extraction: z.object({ id: z.uuid() }) });
 
 export async function importText(formData: FormData) {
   let destination: string;
   try {
-    const response = await fetch(`${apiUrl}/call-offs/import-text`, {
+    const response = await authenticatedApiFetch("/call-offs/import-text", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -33,7 +34,7 @@ export async function importPdf(formData: FormData) {
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) throw new Error("Välj en PDF-fil");
     upload.set("file", file);
-    const response = await fetch(`${apiUrl}/call-offs/import-pdf`, {
+    const response = await authenticatedApiFetch("/call-offs/import-pdf", {
       method: "POST",
       body: upload,
     });
@@ -47,7 +48,7 @@ export async function importPdf(formData: FormData) {
 export async function importEavrop(formData: FormData) {
   let destination: string;
   try {
-    const response = await fetch(`${apiUrl}/call-offs/import-eavrop`, {
+    const response = await authenticatedApiFetch("/call-offs/import-eavrop", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url: requiredText(formData.get("url")) }),
@@ -77,12 +78,14 @@ export async function approveCallOff(formData: FormData) {
       location: optionalText(formData.get("location")),
       periodStart: optionalText(formData.get("periodStart")),
       periodEnd: optionalText(formData.get("periodEnd")),
+      periodSegments: periodSegments(formData),
       scope: scope(formData),
       schedule: optionalText(formData.get("schedule")),
       onCall: formData.get("onCall") === "true" ? true : formData.get("onCall") === "false" ? false : null,
       introduction: optionalText(formData.get("introduction")),
       mandatoryRequirements: lines(formData.get("mandatoryRequirements")),
       preferences: lines(formData.get("preferences")),
+      classifiedRequirements: classifiedRequirements(formData),
       criteria: lines(formData.get("criteria")),
       priorities: lines(formData.get("priorities")),
       requiredDocuments: lines(formData.get("requiredDocuments")),
@@ -90,7 +93,7 @@ export async function approveCallOff(formData: FormData) {
       submissionDeadline: optionalText(formData.get("submissionDeadline")),
       otherTerms: lines(formData.get("otherTerms")),
     });
-    const response = await fetch(`${apiUrl}/call-offs/reviews/${extractionId}/approve`, {
+    const response = await authenticatedApiFetch(`/call-offs/reviews/${extractionId}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(fields),
@@ -98,7 +101,10 @@ export async function approveCallOff(formData: FormData) {
     if (!response.ok) throw new Error(await responseError(response));
     destination = `/?review=${extractionId}&success=${encodeURIComponent("CallOff godkänd och sparad")}`;
   } catch (error) {
-    destination = `/?review=${extractionId}&${errorQuery(error)}`;
+    destination =
+      error instanceof AuthenticationRequiredError
+        ? "/login"
+        : `/?review=${extractionId}&${errorQuery(error)}`;
   }
   redirect(destination);
 }
@@ -146,7 +152,50 @@ function scope(formData: FormData) {
   return { consultantCount: count === null ? null : Number(count), description };
 }
 
+function periodSegments(formData: FormData) {
+  const count = Number(requiredText(formData.get("periodSegmentCount")) || "0");
+  return Array.from({ length: count }, (_, index) => {
+    const prefix = `periodSegment.${index}`;
+    return {
+      label: optionalText(formData.get(`${prefix}.label`)),
+      periodStart: optionalText(formData.get(`${prefix}.periodStart`)),
+      periodEnd: optionalText(formData.get(`${prefix}.periodEnd`)),
+      workWeeks: lines(formData.get(`${prefix}.workWeeks`)).map(parseWorkWeek),
+      schedule: optionalText(formData.get(`${prefix}.schedule`)),
+      onCall:
+        formData.get(`${prefix}.onCall`) === "true"
+          ? true
+          : formData.get(`${prefix}.onCall`) === "false"
+            ? false
+            : null,
+    };
+  });
+}
+
+function classifiedRequirements(formData: FormData) {
+  const count = Number(requiredText(formData.get("classifiedRequirementCount")) || "0");
+  return Array.from({ length: count }, (_, index) => {
+    const prefix = `classifiedRequirement.${index}`;
+    return {
+      level: requiredText(formData.get(`${prefix}.level`)),
+      category: requiredText(formData.get(`${prefix}.category`)),
+      text: requiredText(formData.get(`${prefix}.text`)),
+      evidenceRequired: optionalText(formData.get(`${prefix}.evidenceRequired`)),
+    };
+  }).filter((requirement) => requirement.text !== "");
+}
+
+function parseWorkWeek(value: string) {
+  const match = /^(?:(\d{4})[- ]?)?(?:v|w)?\s*(\d{1,2})$/i.exec(value);
+  if (match === null) throw new Error(`Ogiltig arbetsvecka: ${value}`);
+  return {
+    year: match[1] === undefined ? null : Number(match[1]),
+    week: Number(match[2]),
+  };
+}
+
 function errorDestination(error: unknown) {
+  if (error instanceof AuthenticationRequiredError) return "/login";
   return `/?${errorQuery(error)}`;
 }
 

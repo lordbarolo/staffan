@@ -67,6 +67,7 @@ export function expectedEslovExtraction(artifactId: string, completeDocument: bo
     location: "Kvarngatan 7, 241 39 Eslöv",
     periodStart: "2025-06-23",
     periodEnd: "2025-08-10",
+    periodSegments: [],
     scope: completeDocument ? { consultantCount: null, description: "100 procent" } : null,
     schedule: completeDocument
       ? "100 procent, arbete var tredje helg, huvudsakligen dagtid med möjlighet till vissa kvällspass"
@@ -84,6 +85,7 @@ export function expectedEslovExtraction(artifactId: string, completeDocument: bo
       "Samtliga tillämpliga krav i ramavtal VOO 2024/178",
     ],
     preferences: [],
+    classifiedRequirements: [],
     criteria: [
       "Uppdraget tilldelas högst rangordnad leverantör som uppfyller ställda kompetenskrav",
     ],

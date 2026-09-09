@@ -1,11 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallOffApproval, RawArtifact } from "@staffan/core";
 import type { ExtractionRecord } from "@staffan/ingress";
-import ExcelJS from "exceljs";
+import type { InjectOptions } from "fastify";
+import { ApprovalConflictError } from "@staffan/db";
 
 import { expectedKarlstadExtraction, karlstadRawText } from "../../../packages/ingress/test-fixtures/karlstad-calloff.js";
 
-import { buildApp, eavropContent, type CallOffApiRepository } from "./app.js";
+import { buildApp, type CallOffApiRepository } from "./app.js";
+import type { AuthService } from "./auth.js";
+
+const sessionToken = "a".repeat(43);
+const operator = { id: "operator-1", username: "operator" };
+const authService: AuthService = {
+  async login(username, password) {
+    return username === "operator" && password === "test-password"
+      ? { expiresAt: "2027-01-01T12:00:00.000Z", operator, token: sessionToken }
+      : null;
+  },
+  logout: vi.fn(),
+  async verify(token) {
+    return token === sessionToken ? operator : null;
+  },
+};
+const auth = { cookieSecure: false, service: authService };
 
 const openApps: ReturnType<typeof buildApp>[] = [];
 
@@ -40,34 +57,33 @@ describe("GET /health", () => {
   });
 });
 
-describe("CallOff intake API", () => {
-  it("extracts spreadsheet text even when e-Avrop reports an unknown media type", async () => {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet("Behov");
-    sheet.addRow(["Roll", "Sjuksköterska"]);
-    sheet.addRow(["Omfattning", "100 %"]);
-    const content = new Uint8Array(await workbook.xlsx.writeBuffer());
+describe("operator authentication", () => {
+  it("keeps health public and protects every business route", async () => {
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), undefined, auth);
+    openApps.push(app);
 
-    const result = await eavropContent({
-      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=42",
-      externalRef: "42",
-      pageText: "Avrop",
-      attachments: [
-        {
-          sourceUrl: "https://www.e-avrop.com/AttachmentDispatcher.aspx?id=1",
-          fileName: "Anbudsinbjudan.xlsx",
-          mediaType: "application/octet-stream",
-          content,
-        },
-      ],
-      log: [],
-    });
-
-    expect(result).toContain("Arbetsblad: Behov");
-    expect(result).toContain("Roll\tSjuksköterska");
-    expect(result).toContain("Omfattning\t100 %");
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/call-offs/reviews" })).statusCode).toBe(401);
   });
 
+  it("creates an HttpOnly SameSite session cookie after login", async () => {
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), undefined, auth);
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      payload: { password: "test-password", username: "operator" },
+      url: "/auth/login",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["set-cookie"]).toContain("HttpOnly");
+    expect(response.headers["set-cookie"]).toContain("SameSite=Strict");
+    expect(response.headers["set-cookie"]).not.toContain("Secure");
+  });
+});
+
+describe("CallOff intake API", () => {
   it("imports an e-Avrop link through the existing review pipeline", async () => {
     const artifacts: RawArtifact[] = [];
     const repository: CallOffApiRepository = {
@@ -107,10 +123,10 @@ describe("CallOff intake API", () => {
           };
         },
       },
-    });
+    }, auth);
     openApps.push(app);
 
-    const response = await app.inject({
+    const response = await authenticatedInject(app, {
       method: "POST",
       url: "/call-offs/import-eavrop",
       payload: { url: "https://www.e-avrop.com/notice.aspx?id=42" },
@@ -139,10 +155,10 @@ describe("CallOff intake API", () => {
         identity: { provider: "fixture", name: "generic", version: "1" },
         extractCallOff: vi.fn(),
       },
-    });
+    }, auth);
     openApps.push(app);
 
-    const response = await app.inject({
+    const response = await authenticatedInject(app, {
       method: "POST",
       url: "/call-offs/import-eavrop",
       payload: { url: "https://www.e-avrop.com/notice.aspx?id=42" },
@@ -172,7 +188,8 @@ describe("CallOff intake API", () => {
         const artifact = artifacts.get(extraction.artifactId);
         return artifact === undefined ? null : { artifact, extraction };
       },
-      async approve(_id, fields) {
+      async approve(_id, fields, approvedByOperatorId) {
+        expect(approvedByOperatorId).toBe(operator.id);
         approved = fields;
         return { status: "approved", fields };
       },
@@ -185,10 +202,10 @@ describe("CallOff intake API", () => {
           return expectedKarlstadExtraction(input.artifactId);
         },
       },
-    });
+    }, auth);
     openApps.push(app);
 
-    const imported = await app.inject({
+    const imported = await authenticatedInject(app, {
       method: "POST",
       url: "/call-offs/import-text",
       payload: { content: karlstadRawText, sourceSystem: "pdf-upload" },
@@ -196,12 +213,12 @@ describe("CallOff intake API", () => {
     expect(imported.statusCode).toBe(201);
     const extractionId = imported.json().extraction.id as string;
 
-    const reviewed = await app.inject({ method: "GET", url: `/call-offs/reviews/${extractionId}` });
+    const reviewed = await authenticatedInject(app, { method: "GET", url: `/call-offs/reviews/${extractionId}` });
     expect(reviewed.statusCode).toBe(200);
     const extraction = reviewed.json().extraction.extraction as Record<string, unknown>;
     extraction.location = "Korrigerad placering";
 
-    const response = await app.inject({
+    const response = await authenticatedInject(app, {
       method: "POST",
       url: `/call-offs/reviews/${extractionId}/approve`,
       payload: extraction,
@@ -223,10 +240,10 @@ describe("CallOff intake API", () => {
         identity: { provider: "fixture", name: "generic", version: "1" },
         extractCallOff: vi.fn(),
       },
-    });
+    }, auth);
     openApps.push(app);
 
-    const response = await app.inject({
+    const response = await authenticatedInject(app, {
       method: "POST",
       url: "/call-offs/reviews/00000000-0000-4000-8000-000000000001/approve",
       payload: {},
@@ -248,10 +265,10 @@ describe("CallOff intake API", () => {
         identity: { provider: "fixture", name: "generic", version: "1" },
         extractCallOff: vi.fn(),
       },
-    });
+    }, auth);
     openApps.push(app);
 
-    const response = await app.inject({
+    const response = await authenticatedInject(app, {
       method: "POST",
       url: "/call-offs/import-text",
       payload: { content: "Ett avrop", sourceSystem: "manual" },
@@ -260,3 +277,38 @@ describe("CallOff intake API", () => {
     expect(response.json()).toEqual({ error: "Databasen är inte tillgänglig" });
   });
 });
+
+function authenticatedInject(
+  app: ReturnType<typeof buildApp>,
+  options: InjectOptions,
+) {
+  return app.inject({
+    ...options,
+    headers: { ...options.headers, cookie: `staffan_session=${sessionToken}` },
+  });
+
+  it("returns conflict when an approval idempotency key is reused differently", async () => {
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository: {
+        saveArtifact: vi.fn(),
+        saveExtraction: vi.fn(),
+        listReviews: vi.fn().mockResolvedValue([]),
+        getReview: vi.fn().mockResolvedValue(null),
+        approve: vi.fn().mockRejectedValue(new ApprovalConflictError()),
+      },
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        extractCallOff: vi.fn(),
+      },
+    }, auth);
+    openApps.push(app);
+
+    const response = await authenticatedInject(app, {
+      method: "POST",
+      payload: expectedKarlstadExtraction("00000000-0000-4000-8000-000000000002"),
+      url: "/call-offs/reviews/00000000-0000-4000-8000-000000000001/approve",
+    });
+
+    expect(response.statusCode).toBe(409);
+  });
+}

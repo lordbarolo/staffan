@@ -17,6 +17,9 @@
     "@ai-sdk/openai": "4.0.57",
     "@staffan/core": "workspace:*",
     "ai": "7.0.91",
+    "exceljs": "4.4.0",
+    "mammoth": "1.12.2",
+    "pdf-parse": "2.4.5",
     "playwright": "1.62.1",
     "zod": "4.5.4"
   }

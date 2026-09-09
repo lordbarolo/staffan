@@ -18,6 +18,10 @@ import {
   eslovPageOneText,
   expectedEslovExtraction,
 } from "../test-fixtures/eslov-calloff.js";
+import {
+  anonymisedScannedCallOffOcr,
+  expectedScannedCallOffExtraction,
+} from "../test-fixtures/scanned-calloff.js";
 
 const completeExtraction: Omit<CallOffExtraction, "fieldProvenance"> = {
   externalRef: "AV-001",
@@ -33,12 +37,14 @@ const completeExtraction: Omit<CallOffExtraction, "fieldProvenance"> = {
   location: "Exempelstad",
   periodStart: "2026-06-01",
   periodEnd: "2026-08-16",
+  periodSegments: [],
   scope: { consultantCount: 1, description: "En konsult, 320 timmar" },
   schedule: "Dag, kväll och helg",
   onCall: false,
   introduction: null,
   mandatoryRequirements: ["Minst två års erfarenhet"],
   preferences: [],
+  classifiedRequirements: [],
   criteria: ["Kan arbeta hela perioden"],
   priorities: ["Kontinuitet"],
   requiredDocuments: [],
@@ -231,6 +237,43 @@ describe("quarantine and extraction pipeline", () => {
     expect(result.extraction.status).toBe("failed");
     expect(result.extraction.extraction).toBeNull();
     expect(result.extraction.issues.length).toBeGreaterThan(0);
+  });
+
+  it("preserves multiple periods, work weeks and explicit shall/should classification", async () => {
+    const repository = new MemoryRepository();
+    const result = await processCallOff(
+      {
+        content: anonymisedScannedCallOffOcr,
+        fileName: "syntetiskt-bildavrop.pdf",
+        mediaType: "application/pdf",
+        sourceSystem: "pdf-upload",
+        sourceType: "pdf",
+      },
+      {
+        repository,
+        gateway: gatewayFor(expectedScannedCallOffExtraction),
+      },
+    );
+
+    expect(result.extraction.status).toBe("ready_for_review");
+    expect(result.extraction.issues).toEqual([]);
+    expect(result.extraction.extraction?.periodSegments).toHaveLength(2);
+    expect(result.extraction.extraction?.periodSegments[0]?.workWeeks).toEqual([
+      { year: 2027, week: 22 },
+      { year: 2027, week: 23 },
+      { year: 2027, week: 24 },
+      { year: 2027, week: 25 },
+    ]);
+    expect(
+      result.extraction.extraction?.classifiedRequirements.filter(
+        (requirement) => requirement.level === "shall",
+      ),
+    ).toHaveLength(3);
+    expect(
+      result.extraction.extraction?.classifiedRequirements.filter(
+        (requirement) => requirement.level === "should",
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps trusted portal metadata when the model returns conflicting values", async () => {
