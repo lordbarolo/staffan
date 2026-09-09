@@ -1,0 +1,22 @@
+{
+  "name": "@staffan/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/worker.ts",
+    "start": "node dist/worker.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@staffan/core": "workspace:*",
+    "@staffan/db": "workspace:*",
+    "@staffan/ingress": "workspace:*",
+    "pg-boss": "12.29.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "tsx": "4.23.13"
+  }
+}

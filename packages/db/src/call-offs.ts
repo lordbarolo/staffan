@@ -1,11 +1,26 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
-import type { CallOff, CallOffApproval, RawArtifact } from "@staffan/core";
+import { callOffApprovalSchema, type CallOff, type CallOffApproval, type RawArtifact } from "@staffan/core";
 import type { CallOffReviewRepository, ExtractionRecord } from "@staffan/ingress";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNotNull, isNull } from "drizzle-orm";
 
-import { createDatabaseClient } from "./index.js";
+import { createDatabaseClient } from "./client.js";
 import { callOffExtractions, callOffs, rawArtifacts } from "./schema.js";
+
+export class ApprovalConflictError extends Error {
+  constructor() {
+    super("Extraktionen har redan godkänts med ett annat innehåll eller av en annan operatör");
+    this.name = "ApprovalConflictError";
+  }
+}
+
+export class ApprovalValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApprovalValidationError";
+  }
+}
 
 export interface ReviewRecord {
   artifact: RawArtifact;
@@ -17,7 +32,7 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
   const { client, db } = connection;
 
   const repository: CallOffReviewRepository & {
-    approve(extractionId: string, fields: CallOffApproval): Promise<CallOff>;
+    approve(extractionId: string, fields: CallOffApproval, approvedByOperatorId: string): Promise<CallOff>;
     close(): Promise<void>;
     getReview(extractionId: string): Promise<ReviewRecord | null>;
     listReviews(): Promise<ReviewRecord[]>;
@@ -55,35 +70,77 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
         .select()
         .from(callOffExtractions)
         .innerJoin(rawArtifacts, eq(callOffExtractions.artifactId, rawArtifacts.id))
+        .leftJoin(callOffs, eq(callOffExtractions.id, callOffs.extractionId))
+        .where(isNull(callOffs.id))
         .orderBy(desc(callOffExtractions.createdAt));
       return rows.map(mapReview);
     },
-    async approve(extractionId, fields) {
+    async approve(extractionId, fields, approvedByOperatorId) {
+      const validatedFields = callOffApprovalSchema.parse(fields);
       const review = await this.getReview(extractionId);
       if (review?.extraction.extraction === null || review === null) {
         throw new Error("Extraktionen kan inte godkännas");
       }
+      if (validatedFields.sourceSystem !== review.artifact.sourceSystem) {
+        throw new ApprovalValidationError("Källsystemet får inte ändras vid godkännande");
+      }
+
+      const existingApprovals = await db
+        .select()
+        .from(callOffs)
+        .where(eq(callOffs.extractionId, extractionId))
+        .limit(2);
+      const existingApproval = findReplayableApproval(
+        existingApprovals,
+        validatedFields,
+        approvedByOperatorId,
+      );
+      if (existingApproval !== null) return mapCallOff(existingApproval, review);
+
       const now = new Date();
       const id = randomUUID();
-      await db.insert(callOffs).values({
-        id,
-        artifactId: review.artifact.id,
-        extractionId,
-        status: "approved",
-        fields,
-        extractionConfidence: review.extraction.extraction.confidence,
-        fieldConfidence: review.extraction.extraction.fieldConfidence,
-        fieldProvenance: review.extraction.extraction.fieldProvenance,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const inserted = await db
+        .insert(callOffs)
+        .values({
+          id,
+          approvedByOperatorId,
+          artifactId: review.artifact.id,
+          extractionId,
+          status: "approved",
+          fields: validatedFields,
+          extractionConfidence: review.extraction.extraction.confidence,
+          fieldConfidence: review.extraction.extraction.fieldConfidence,
+          fieldProvenance: review.extraction.extraction.fieldProvenance,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({
+          target: callOffs.extractionId,
+          where: isNotNull(callOffs.approvedByOperatorId),
+        })
+        .returning();
+
+      if (inserted[0] === undefined) {
+        const concurrentlyInserted = await db
+          .select()
+          .from(callOffs)
+          .where(eq(callOffs.extractionId, extractionId))
+          .limit(2);
+        const concurrentApproval = findReplayableApproval(
+          concurrentlyInserted,
+          validatedFields,
+          approvedByOperatorId,
+        );
+        if (concurrentApproval === null) throw new ApprovalConflictError();
+        return mapCallOff(concurrentApproval, review);
+      }
       return {
         id,
         artifactId: review.artifact.id,
         status: "approved",
         extractionConfidence: review.extraction.extraction.confidence,
         sourceArtifacts: [review.artifact.id],
-        fields,
+        fields: validatedFields,
         fieldConfidence: review.extraction.extraction.fieldConfidence,
         fieldProvenance: review.extraction.extraction.fieldProvenance,
         createdAt: now.toISOString(),
@@ -96,6 +153,27 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
   };
 
   return repository;
+}
+
+export function findReplayableApproval<TApproval extends {
+  approvedByOperatorId: string | null;
+  fields: CallOffApproval;
+}>(
+  approvals: TApproval[],
+  fields: CallOffApproval,
+  approvedByOperatorId: string,
+): TApproval | null {
+  if (approvals.length === 0) return null;
+  const approved = approvals[0];
+  if (
+    approvals.length !== 1 ||
+    approved === undefined ||
+    approved.approvedByOperatorId !== approvedByOperatorId ||
+    !isDeepStrictEqual(approved.fields, fields)
+  ) {
+    throw new ApprovalConflictError();
+  }
+  return approved;
 }
 
 function mapReview(row: {
@@ -129,5 +207,26 @@ function mapReview(row: {
       status: extraction.status as ExtractionRecord["status"],
       createdAt: extraction.createdAt.toISOString(),
     },
+  };
+}
+
+function mapCallOff(
+  approved: typeof callOffs.$inferSelect,
+  review: ReviewRecord,
+): CallOff {
+  if (review.extraction.extraction === null) {
+    throw new ApprovalValidationError("Extraktionen kan inte godkännas");
+  }
+  return {
+    artifactId: approved.artifactId,
+    createdAt: approved.createdAt.toISOString(),
+    extractionConfidence: approved.extractionConfidence,
+    fieldConfidence: approved.fieldConfidence,
+    fieldProvenance: approved.fieldProvenance,
+    fields: approved.fields,
+    id: approved.id,
+    sourceArtifacts: [approved.artifactId],
+    status: "approved",
+    updatedAt: approved.updatedAt.toISOString(),
   };
 }

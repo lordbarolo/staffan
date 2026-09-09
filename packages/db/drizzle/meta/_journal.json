@@ -15,6 +15,20 @@
       "when": 1788440400000,
       "tag": "0001_slice_1_calloff_intake",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788559560793,
+      "tag": "0002_eavrop_polling",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788572427159,
+      "tag": "0003_auth_approval_idempotency",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,13 @@ header {
   margin-bottom: 48px;
 }
 
+.operator-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.operator-bar form { display: block; }
+.secondary-button { background: transparent; color: #18312b; border: 1px solid #bdcac5; }
+.login-shell { display: grid; min-height: 100vh; place-items: center; padding: 40px 20px; }
+.login-card { width: min(440px, 100%); padding: 32px; border: 1px solid #d8dfdb; border-radius: 18px; background: #fff; box-shadow: 0 20px 60px rgb(23 50 43 / 8%); }
+.login-card h1 { font-size: clamp(2.5rem, 10vw, 4.5rem); }
+
 h1,
 h2,
 p {
@@ -89,6 +96,7 @@ h2 {
 .review { padding: 28px 30px; }
 .intake > div { margin-bottom: 24px; }
 form { display: grid; gap: 16px; }
+.portal-form { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #d8dfdb; }
 .pdf-form { margin-top: 24px; padding-top: 24px; border-top: 1px solid #d8dfdb; }
 label { display: grid; gap: 7px; color: #40544f; font-size: .875rem; font-weight: 650; }
 input,
@@ -107,6 +115,15 @@ pre { max-height: 850px; margin: 0; overflow: auto; padding: 18px; border-radius
 .issues ul { margin-bottom: 0; }
 .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 small { color: #62736f; }
+.structured-fields { display: grid; gap: 14px; margin: 0; padding: 16px; border: 1px solid #d8dfdb; border-radius: 10px; }
+.structured-fields legend { padding: 0 6px; color: #40544f; font-size: .875rem; font-weight: 700; }
+.structured-row { display: grid; gap: 12px; padding: 14px; border-radius: 8px; background: #f3f5f2; }
+.queue-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.queue-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 12px 0; border-top: 1px solid #e5eae7; }
+.queue-list li:first-child { border-top: 0; }
+.queue-list a { color: #17633d; font-weight: 700; }
+.queue-list small { grid-column: 1 / -1; }
+details summary { margin: 18px 0 10px; cursor: pointer; font-weight: 700; }
 
 .status {
   display: inline-flex;

@@ -39,6 +39,8 @@ jobs:
       - run: pnpm db:migrate
       - run: pnpm db:smoke
       - run: pnpm check
+      - name: Configure ephemeral test operator
+        run: node docker/configure-test-auth.mjs
       - name: Smoke production web to API
         run: |
           pnpm --filter @staffan/api start &
@@ -48,7 +50,7 @@ jobs:
           cleanup() { kill "$api_pid" "$web_pid" 2>/dev/null || true; }
           trap cleanup EXIT
           curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
-          curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
+          curl --fail --location --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:3000/ | grep 'Logga in'
 
   docker:
     name: Docker verification
@@ -56,14 +58,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Configure ephemeral test operator
+        run: node docker/configure-test-auth.mjs
+      - name: Build the background worker runtime
+        run: docker build --target worker .
       - name: Build and start the full Docker stack
         run: docker compose -f compose.verify.yaml up --build --detach
       - name: Verify containerized health and model intake
         run: |
           set -euo pipefail
           curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3001/health | grep '"database":"ok"'
-          curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3000/ | grep 'API och databas är tillgängliga'
+          curl --fail --location --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:3000/ | grep 'Logga in'
           curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
+            --cookie-jar /tmp/staffan-cookies \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"$OPERATOR_USERNAME\",\"password\":\"$OPERATOR_PASSWORD\"}" \
+            http://127.0.0.1:3001/auth/login | grep 'ci-operator'
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
+            --cookie /tmp/staffan-cookies \
             -H 'content-type: application/json' \
             -d '{"content":"Docker-verifiering","sourceSystem":"ci"}' \
             http://127.0.0.1:3001/call-offs/import-text | grep 'ready_for_review'

@@ -46,6 +46,9 @@ services:
       MODEL_GATEWAY_URL: http://model-gateway:4100/extract
       MODEL_NAME: deterministic-docker-test
       MODEL_VERSION: "1"
+      OPERATOR_USERNAME: ${OPERATOR_USERNAME:?OPERATOR_USERNAME is required}
+      OPERATOR_PASSWORD_HASH: ${OPERATOR_PASSWORD_HASH:?OPERATOR_PASSWORD_HASH is required}
+      AUTH_COOKIE_SECURE: "false"
     ports:
       - "3001:3001"
     depends_on:
@@ -64,6 +67,7 @@ services:
       context: .
       target: web
     environment:
+      AUTH_COOKIE_SECURE: "false"
       INTERNAL_API_URL: http://api:3001
     ports:
       - "3000:3000"

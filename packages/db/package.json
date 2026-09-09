@@ -15,9 +15,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "migrate": "tsx src/migrate.ts",
+    "migrate": "pnpm build && node dist/migrate.js",
     "typecheck": "tsc --noEmit",
-    "verify": "tsx src/verify.ts"
+    "verify": "pnpm build && node dist/verify.js"
   },
   "dependencies": {
     "@staffan/core": "workspace:*",

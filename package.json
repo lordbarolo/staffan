@@ -5,10 +5,11 @@
   "type": "module",
   "packageManager": "pnpm@11.25.0",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "build": "pnpm --recursive build",
+    "auth:hash-password": "pnpm --filter @staffan/api build && node apps/api/dist/hash-password.js",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:migrate": "pnpm --filter @staffan/db migrate",
     "db:smoke": "pnpm --filter @staffan/db verify",
