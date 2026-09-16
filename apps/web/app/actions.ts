@@ -11,12 +11,13 @@ const intakeResponseSchema = z.object({ extraction: z.object({ id: z.uuid() }) }
 export async function importText(formData: FormData) {
   let destination: string;
   try {
+    const externalRef = optionalText(formData.get("externalRef"));
     const response = await authenticatedApiFetch("/call-offs/import-text", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         content: formData.get("content"),
-        externalRef: optionalText(formData.get("externalRef")),
+        ...(externalRef === null ? {} : { externalRef }),
         sourceSystem: "manual",
       }),
     });
@@ -54,6 +55,22 @@ export async function importEavrop(formData: FormData) {
       body: JSON.stringify({ url: requiredText(formData.get("url")) }),
     });
     destination = await intakeDestination(response);
+  } catch (error) {
+    destination = errorDestination(error);
+  }
+  redirect(destination);
+}
+
+export async function importEavropEmail(formData: FormData) {
+  let destination: string;
+  try {
+    const response = await authenticatedApiFetch("/call-offs/import-eavrop-email", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rawEmail: requiredText(formData.get("rawEmail")) }),
+    });
+    if (!response.ok) throw new Error(await responseError(response));
+    destination = `/?success=${encodeURIComponent("Avropsmailet registrerades och lades i hämtningskön")}`;
   } catch (error) {
     destination = errorDestination(error);
   }

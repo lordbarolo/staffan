@@ -4,10 +4,12 @@ import {
   type IngressDiscoveryRepository,
 } from "@staffan/db";
 import type { RawArtifact } from "@staffan/core";
-import type {
-  CallOffReviewRepository,
-  EavropDiscoveredCallOff,
-  ExtractionRecord,
+import {
+  deriveEavropExternalRef,
+  findEavropCallOffUrlInEmail,
+  type CallOffReviewRepository,
+  type EavropDiscoveredCallOff,
+  type ExtractionRecord,
 } from "@staffan/ingress";
 import { describe, expect, it, vi } from "vitest";
 
@@ -55,7 +57,10 @@ class MemoryDiscoveryRepository implements IngressDiscoveryRepository {
   }
 
   async markQueued(id: string) {
+    const record = this.records.get(id);
+    if (record === undefined || !["discovered", "queued"].includes(record.status)) return false;
     this.update(id, { status: "queued" });
+    return true;
   }
 
   async claim(id: string) {
@@ -113,6 +118,67 @@ function callOffRepository() {
 }
 
 describe("e-Avrop background jobs", () => {
+  it("takes representative incoming mail through the shared pipeline to manual review", async () => {
+    const rawEmail = [
+      "From: avrop@example.invalid",
+      "Subject: Nytt avrop",
+      "",
+      "Öppna avropet: https://www.e-avrop.com/notice.aspx?id=AV-MAIL-E2E",
+    ].join("\r\n");
+    const sourceUrl = findEavropCallOffUrlInEmail(rawEmail);
+    expect(sourceUrl).not.toBeNull();
+
+    const discoveryRepository = new MemoryDiscoveryRepository();
+    const discovery = await discoveryRepository.register({
+      externalRef: deriveEavropExternalRef(sourceUrl as string),
+      sourceUrl: sourceUrl as string,
+    });
+    await discoveryRepository.markQueued(discovery.id);
+    const callOffs = callOffRepository();
+
+    const result = await importEavropDiscovery({
+      callOffRepository: callOffs.repository,
+      discoveryId: discovery.id,
+      discoveryRepository,
+      gateway: {
+        identity: { provider: "fixture", name: "mailbox-e2e", version: "1" },
+        async extractCallOff(input) {
+          return expectedScannedCallOffExtraction(input.artifactId);
+        },
+      },
+      maxAttempts: 3,
+      portal: {
+        discoverCallOffs: vi.fn(),
+        fetchCallOff: vi.fn().mockResolvedValue({
+          attachments: [
+            {
+              content: new TextEncoder().encode("Bilaga med obligatoriska krav"),
+              fileName: "krav.txt",
+              mediaType: "text/plain",
+              sourceUrl: "https://www.e-avrop.com/files/krav.txt",
+            },
+          ],
+          attachmentStatuses: [
+            { detail: "Bilagan hämtades", fileName: "krav.txt", status: "downloaded" },
+          ],
+          externalRef: "AV-MAIL-E2E",
+          log: [],
+          pageText: "Representativ e-Avrop-text för ett avrop som kräver manuell granskning.",
+          sourceUrl,
+        }),
+      },
+    });
+
+    expect(result.status).toBe("in_review");
+    expect(callOffs.artifacts[0]).toMatchObject({
+      externalRef: "AV-MAIL-E2E",
+      sourceSystem: "e-avrop",
+    });
+    expect(callOffs.artifacts[0]?.content).toContain("Bilaga med obligatoriska krav");
+    expect(callOffs.extractions).toHaveLength(1);
+    expect((await discoveryRepository.get(discovery.id))?.status).toBe("in_review");
+  });
+
   it("registers portal discoveries and enqueues only pending imports", async () => {
     const discoveryRepository = new MemoryDiscoveryRepository();
     const enqueue = vi.fn().mockResolvedValue("job-1");
@@ -139,6 +205,37 @@ describe("e-Avrop background jobs", () => {
     expect((await discoveryRepository.list())[0]?.status).toBe("queued");
   });
 
+  it("does not move a discovery backwards when a worker claims it during enqueue", async () => {
+    const discoveryRepository = new MemoryDiscoveryRepository();
+    const result = await pollEavrop({
+      discoveryRepository,
+      pollUrl: "https://www.e-avrop.com/dashboard.aspx",
+      portal: {
+        fetchCallOff: vi.fn(),
+        discoverCallOffs: vi.fn().mockResolvedValue({
+          callOffs: [
+            {
+              externalRef: "AV-RACE",
+              sourceUrl: "https://www.e-avrop.com/notice.aspx?id=AV-RACE",
+            },
+          ],
+          log: [],
+        }),
+      },
+      queue: {
+        async enqueue(discovery) {
+          await discoveryRepository.claim(discovery.id);
+          return "job-race";
+        },
+      },
+    });
+
+    expect(result).toEqual({ discovered: 1, queued: 1 });
+    const [record] = await discoveryRepository.list();
+    expect(record?.status).toBe("processing");
+    expect(record?.leaseExpiresAt).not.toBeNull();
+  });
+
   it("imports a queued discovery through the canonical review pipeline", async () => {
     const discoveryRepository = new MemoryDiscoveryRepository();
     const discovery = await discoveryRepository.register({
@@ -163,6 +260,7 @@ describe("e-Avrop background jobs", () => {
         discoverCallOffs: vi.fn(),
         fetchCallOff: vi.fn().mockResolvedValue({
           attachments: [],
+          attachmentStatuses: [],
           externalRef: "AV-102",
           log: [],
           pageText: "Syntetiskt avrop med fullständigt underlag för manuell granskning.",

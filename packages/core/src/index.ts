@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const isoDate = z.iso.date({ error: "Ange ett giltigt datum som ÅÅÅÅ-MM-DD" });
+const nonBlank = (maximum: number) => z.string().trim().min(1).max(maximum);
+const nullableNonBlank = (maximum: number) => nonBlank(maximum).nullable();
 
 export const workWeekSchema = z.object({
   year: z.number().int().min(2000).max(2200).nullable(),
@@ -8,11 +10,11 @@ export const workWeekSchema = z.object({
 });
 
 export const periodSegmentSchema = z.object({
-  label: z.string().min(1).max(200).nullable(),
+  label: nullableNonBlank(200),
   periodStart: isoDate.nullable(),
   periodEnd: isoDate.nullable(),
   workWeeks: z.array(workWeekSchema).max(106),
-  schedule: z.string().min(1).max(1_000).nullable(),
+  schedule: nullableNonBlank(1_000),
   onCall: z.boolean().nullable(),
 });
 
@@ -29,57 +31,57 @@ export const classifiedRequirementSchema = z.object({
     "commercial",
     "other",
   ]),
-  text: z.string().min(1).max(1_000),
-  evidenceRequired: z.string().min(1).max(1_000).nullable(),
+  text: nonBlank(1_000),
+  evidenceRequired: nullableNonBlank(1_000),
 });
 
 export const sourceTypeSchema = z.enum(["raw_text", "pdf"]);
 
 export const fieldSourceSchema = z.object({
   artifactId: z.uuid(),
-  excerpt: z.string().min(1).max(500),
-  locator: z.string().min(1).max(100).nullable(),
+  excerpt: nonBlank(500),
+  locator: nullableNonBlank(100),
 });
 
 export const callOffFieldsSchema = z.object({
-  externalRef: z.string().min(1).max(200).nullable(),
-  sourceSystem: z.string().min(1).max(100),
-  careProvider: z.string().min(1).max(300).nullable(),
-  organizationNumber: z.string().min(1).max(50).nullable(),
-  administration: z.string().min(1).max(300).nullable(),
-  unit: z.string().min(1).max(300).nullable(),
+  externalRef: nullableNonBlank(200),
+  sourceSystem: nonBlank(100),
+  careProvider: nullableNonBlank(300),
+  organizationNumber: nullableNonBlank(50),
+  administration: nullableNonBlank(300),
+  unit: nullableNonBlank(300),
   requester: z
     .object({
-      name: z.string().min(1).max(200).nullable(),
-      phone: z.string().min(1).max(100).nullable(),
+      name: nullableNonBlank(200),
+      phone: nullableNonBlank(100),
       emails: z.array(z.email()).max(20),
     })
     .nullable(),
-  role: z.string().min(1).max(200).nullable(),
-  specialty: z.string().min(1).max(300).nullable(),
-  competenceRequirements: z.array(z.string().min(1).max(500)).max(50),
-  location: z.string().min(1).max(500).nullable(),
+  role: nullableNonBlank(200),
+  specialty: nullableNonBlank(300),
+  competenceRequirements: z.array(nonBlank(500)).max(50),
+  location: nullableNonBlank(500),
   periodStart: isoDate.nullable(),
   periodEnd: isoDate.nullable(),
   periodSegments: z.array(periodSegmentSchema).max(50).default([]),
   scope: z
     .object({
       consultantCount: z.number().int().positive().nullable(),
-      description: z.string().min(1).max(500).nullable(),
+      description: nullableNonBlank(500),
     })
     .nullable(),
-  schedule: z.string().min(1).max(1_000).nullable(),
+  schedule: nullableNonBlank(1_000),
   onCall: z.boolean().nullable(),
-  introduction: z.string().min(1).max(2_000).nullable(),
-  mandatoryRequirements: z.array(z.string().min(1).max(1_000)).max(100),
-  preferences: z.array(z.string().min(1).max(1_000)).max(100),
+  introduction: nullableNonBlank(2_000),
+  mandatoryRequirements: z.array(nonBlank(1_000)).max(100),
+  preferences: z.array(nonBlank(1_000)).max(100),
   classifiedRequirements: z.array(classifiedRequirementSchema).max(200).default([]),
-  criteria: z.array(z.string().min(1).max(1_000)).max(100),
-  priorities: z.array(z.string().min(1).max(1_000)).max(100),
-  requiredDocuments: z.array(z.string().min(1).max(1_000)).max(100),
-  commercialTerms: z.string().min(1).max(2_000).nullable(),
+  criteria: z.array(nonBlank(1_000)).max(100),
+  priorities: z.array(nonBlank(1_000)).max(100),
+  requiredDocuments: z.array(nonBlank(1_000)).max(100),
+  commercialTerms: nullableNonBlank(2_000),
   submissionDeadline: isoDate.nullable(),
-  otherTerms: z.array(z.string().min(1).max(1_000)).max(100),
+  otherTerms: z.array(nonBlank(1_000)).max(100),
 });
 
 export const callOffExtractionSchema = callOffFieldsSchema.extend({

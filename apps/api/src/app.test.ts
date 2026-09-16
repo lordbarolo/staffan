@@ -93,6 +93,7 @@ describe("CallOff intake API", () => {
       saveExtraction: vi.fn(),
       listReviews: vi.fn().mockResolvedValue([]),
       getReview: vi.fn().mockResolvedValue(null),
+      getOriginalArtifact: vi.fn().mockResolvedValue(null),
       approve: vi.fn(),
     };
     const app = buildApp(vi.fn().mockResolvedValue(undefined), {
@@ -109,6 +110,9 @@ describe("CallOff intake API", () => {
             sourceUrl,
             externalRef: "AV-42",
             pageText: "Avrop om sjuksköterska i Karlstad",
+            attachmentStatuses: [
+              { detail: "Bilagan hämtades", fileName: "schema.txt", status: "downloaded" },
+            ],
             attachments: [
               {
                 sourceUrl: "https://www.e-avrop.com/files/schema.txt",
@@ -149,6 +153,7 @@ describe("CallOff intake API", () => {
         saveExtraction: vi.fn(),
         listReviews: vi.fn().mockResolvedValue([]),
         getReview: vi.fn().mockResolvedValue(null),
+        getOriginalArtifact: vi.fn().mockResolvedValue(null),
         approve: vi.fn(),
       },
       gateway: {
@@ -186,8 +191,12 @@ describe("CallOff intake API", () => {
         const extraction = extractions.get(id);
         if (extraction === undefined) return null;
         const artifact = artifacts.get(extraction.artifactId);
-        return artifact === undefined ? null : { artifact, extraction };
+        return artifact === undefined ? null : {
+          artifact: { ...artifact, originalAvailable: false },
+          extraction,
+        };
       },
+      getOriginalArtifact: vi.fn().mockResolvedValue(null),
       async approve(_id, fields, approvedByOperatorId) {
         expect(approvedByOperatorId).toBe(operator.id);
         approved = fields;
@@ -234,6 +243,7 @@ describe("CallOff intake API", () => {
         saveExtraction: vi.fn(),
         listReviews: vi.fn().mockResolvedValue([]),
         getReview: vi.fn().mockResolvedValue(null),
+        getOriginalArtifact: vi.fn().mockResolvedValue(null),
         approve: vi.fn(),
       },
       gateway: {
@@ -259,6 +269,7 @@ describe("CallOff intake API", () => {
         saveExtraction: vi.fn(),
         listReviews: vi.fn().mockRejectedValue(new Error("offline")),
         getReview: vi.fn().mockRejectedValue(new Error("offline")),
+        getOriginalArtifact: vi.fn().mockRejectedValue(new Error("offline")),
         approve: vi.fn().mockRejectedValue(new Error("offline")),
       },
       gateway: {
@@ -276,15 +287,191 @@ describe("CallOff intake API", () => {
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: "Databasen är inte tillgänglig" });
   });
-});
 
-function authenticatedInject(
-  app: ReturnType<typeof buildApp>,
-  options: InjectOptions,
-) {
-  return app.inject({
-    ...options,
-    headers: { ...options.headers, cookie: `staffan_session=${sessionToken}` },
+  it("registers, deduplicates and queues an e-Avrop link found in incoming mail", async () => {
+    const discovery = {
+      attemptCount: 0,
+      createdAt: "2026-09-16T08:00:00.000Z",
+      externalRef: "AV-EMAIL-1",
+      extractionId: null,
+      id: "discovery-email-1",
+      lastError: null,
+      leaseExpiresAt: null,
+      sourceKey: "ref:AV-EMAIL-1",
+      sourceSystem: "e-avrop",
+      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-1",
+      status: "discovered" as const,
+      updatedAt: "2026-09-16T08:00:00.000Z",
+    };
+    let registeredStatus: "discovered" | "queued" = "discovered";
+    const register = vi.fn().mockImplementation(async () => ({
+      ...discovery,
+      status: registeredStatus,
+    }));
+    const markQueued = vi.fn().mockImplementation(async () => {
+      registeredStatus = "queued";
+      return true;
+    });
+    const enqueue = vi.fn()
+      .mockResolvedValueOnce("job-email-1")
+      .mockResolvedValueOnce(null);
+    const repository: CallOffApiRepository = {
+      saveArtifact: vi.fn(),
+      saveExtraction: vi.fn(),
+      listReviews: vi.fn().mockResolvedValue([]),
+      getReview: vi.fn().mockResolvedValue(null),
+      getOriginalArtifact: vi.fn().mockResolvedValue(null),
+      approve: vi.fn(),
+    };
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository,
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        extractCallOff: vi.fn(),
+      },
+      discoveryRepository: {
+        list: vi.fn().mockResolvedValue([]),
+        markQueued,
+        register,
+      },
+    }, auth, { queue: { enqueue } });
+    openApps.push(app);
+
+    const first = await authenticatedInject(app, {
+      method: "POST",
+      url: "/call-offs/import-eavrop-email",
+      payload: {
+        rawEmail: "Avrop: https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-1",
+      },
+    });
+    const duplicate = await authenticatedInject(app, {
+      method: "POST",
+      url: "/call-offs/import-eavrop-email",
+      payload: {
+        rawEmail: "Samma avrop: https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-1",
+      },
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(first.json()).toMatchObject({
+      discovery: { id: discovery.id, sourceSystem: "e-avrop", status: "queued" },
+      queued: true,
+    });
+    expect(duplicate.statusCode).toBe(202);
+    expect(duplicate.json()).toMatchObject({
+      discovery: { id: discovery.id, status: "queued" },
+      queued: false,
+    });
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(markQueued).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts raw RFC 822 mail with the mailbox token and exposes unsupported mail", async () => {
+    const token = "mailbox-test-token-that-is-at-least-32-characters";
+    const register = vi.fn().mockResolvedValue({
+      attemptCount: 0,
+      createdAt: "2026-09-16T08:00:00.000Z",
+      externalRef: "AV-EMAIL-2",
+      extractionId: null,
+      id: "discovery-email-2",
+      lastError: null,
+      leaseExpiresAt: null,
+      sourceKey: "ref:AV-EMAIL-2",
+      sourceSystem: "e-avrop",
+      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-2",
+      status: "discovered",
+      updatedAt: "2026-09-16T08:00:00.000Z",
+    });
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository: {
+        saveArtifact: vi.fn(),
+        saveExtraction: vi.fn(),
+        listReviews: vi.fn().mockResolvedValue([]),
+        getReview: vi.fn().mockResolvedValue(null),
+        getOriginalArtifact: vi.fn().mockResolvedValue(null),
+        approve: vi.fn(),
+      },
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        extractCallOff: vi.fn(),
+      },
+      discoveryRepository: {
+        list: vi.fn().mockResolvedValue([]),
+        markQueued: vi.fn().mockResolvedValue(true),
+        register,
+      },
+    }, auth, {
+      queue: { enqueue: vi.fn().mockResolvedValue("job-email-2") },
+      token,
+    });
+    openApps.push(app);
+
+    const accepted = await app.inject({
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "message/rfc822",
+      },
+      payload: [
+        "From: sender@example.invalid",
+        "Subject: Nytt avrop",
+        "",
+        "https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-2",
+      ].join("\r\n"),
+      url: "/call-offs/import-eavrop-email",
+    });
+    const unsupported = await app.inject({
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "message/rfc822",
+      },
+      payload: "Subject: Manuell kontroll\r\n\r\nhttps://example.invalid/notice?id=1",
+      url: "/call-offs/import-eavrop-email",
+    });
+
+    expect(accepted.statusCode).toBe(202);
+    expect(register).toHaveBeenCalledWith({
+      externalRef: "AV-EMAIL-2",
+      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=AV-EMAIL-2",
+    });
+    expect(unsupported.statusCode).toBe(422);
+    expect(unsupported.json().error).toContain("manuell kontroll krävs");
+  });
+
+  it("serves a preserved PDF original only through the authenticated review route", async () => {
+    const content = new TextEncoder().encode("%PDF-1.7 synthetic original");
+    const repository: CallOffApiRepository = {
+      saveArtifact: vi.fn(),
+      saveExtraction: vi.fn(),
+      listReviews: vi.fn().mockResolvedValue([]),
+      getReview: vi.fn().mockResolvedValue(null),
+      getOriginalArtifact: vi.fn().mockResolvedValue({
+        content,
+        fileName: "underlag.pdf",
+        mediaType: "application/pdf",
+        sha256: "a".repeat(64),
+      }),
+      approve: vi.fn(),
+    };
+    const app = buildApp(vi.fn().mockResolvedValue(undefined), {
+      repository,
+      gateway: {
+        identity: { provider: "fixture", name: "generic", version: "1" },
+        extractCallOff: vi.fn(),
+      },
+    }, auth);
+    openApps.push(app);
+    const url = "/call-offs/reviews/00000000-0000-4000-8000-000000000001/original";
+
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(401);
+    const response = await authenticatedInject(app, { method: "GET", url });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.rawPayload).toEqual(Buffer.from(content));
   });
 
   it("returns conflict when an approval idempotency key is reused differently", async () => {
@@ -294,6 +481,7 @@ function authenticatedInject(
         saveExtraction: vi.fn(),
         listReviews: vi.fn().mockResolvedValue([]),
         getReview: vi.fn().mockResolvedValue(null),
+        getOriginalArtifact: vi.fn().mockResolvedValue(null),
         approve: vi.fn().mockRejectedValue(new ApprovalConflictError()),
       },
       gateway: {
@@ -310,5 +498,15 @@ function authenticatedInject(
     });
 
     expect(response.statusCode).toBe(409);
+  });
+});
+
+function authenticatedInject(
+  app: ReturnType<typeof buildApp>,
+  options: InjectOptions,
+) {
+  return app.inject({
+    ...options,
+    headers: { ...options.headers, cookie: `staffan_session=${sessionToken}` },
   });
 }

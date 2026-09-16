@@ -173,6 +173,18 @@ export async function eavropContent(
 ) {
   const sections = ["e-Avrop-sida", result.pageText];
 
+  const incompleteAttachments = result.attachmentStatuses.filter(
+    ({ status }) => status !== "downloaded",
+  );
+  if (incompleteAttachments.length > 0) {
+    sections.push(
+      [
+        "OFULLSTÄNDIGT BILAGEUNDERLAG – kontrollera före godkännande",
+        ...incompleteAttachments.map(({ detail, fileName }) => `Bilaga: ${fileName} – ${detail}`),
+      ].join("\n"),
+    );
+  }
+
   for (const attachment of result.attachments) {
     sections.push(`Bilaga: ${attachment.fileName}`);
     try {

@@ -13,14 +13,21 @@ import { createOpenAI, type OpenAILanguageModelResponsesOptions } from "@ai-sdk/
 import { generateText, NoOutputGeneratedError, Output } from "ai";
 import { z } from "zod";
 
+import { checkProvenance } from "./provenance.js";
+
 export {
   deriveEavropExternalRef,
   discoverEavropCallOffLinks,
+  downloadEavropAttachments,
+  EAVROP_IMPORT_QUEUE,
   EavropAdapterError,
+  findEavropCallOffUrlInEmail,
+  isAllowedEavropRequest,
   isEavropCallOffUrl,
   PlaywrightEavropPortalAdapter,
   validateEavropUrl,
   type EavropAttachment,
+  type EavropAttachmentStatus,
   type EavropCredentials,
   type EavropDiscoveredCallOff,
   type EavropDiscoveryResult,
@@ -66,8 +73,13 @@ export interface ExtractionRecord {
 }
 
 export interface CallOffReviewRepository {
-  saveArtifact(artifact: RawArtifact): Promise<void>;
+  saveArtifact(artifact: RawArtifact, original?: RawArtifactOriginal): Promise<void>;
   saveExtraction(record: ExtractionRecord): Promise<void>;
+}
+
+export interface RawArtifactOriginal {
+  content: Uint8Array;
+  sha256: string;
 }
 
 export interface IntakeInput {
@@ -75,6 +87,7 @@ export interface IntakeInput {
   externalRef?: string | null;
   fileName?: string | null;
   mediaType: string;
+  originalContent?: Uint8Array;
   sourceSystem: string;
   sourceType: SourceType;
 }
@@ -344,7 +357,13 @@ export async function processCallOff(
   dependencies: { gateway: ModelGateway; repository: CallOffReviewRepository },
 ): Promise<IntakeResult> {
   const artifact = quarantineArtifact(input);
-  await dependencies.repository.saveArtifact(artifact);
+  const original = input.originalContent === undefined
+    ? undefined
+    : {
+        content: input.originalContent,
+        sha256: createHash("sha256").update(input.originalContent).digest("hex"),
+      };
+  await dependencies.repository.saveArtifact(artifact, original);
 
   let record: ExtractionRecord;
   try {
@@ -362,23 +381,25 @@ export async function processCallOff(
           }
         : candidate;
     const parsed = callOffExtractionSchema.safeParse(candidateWithTrustedSource);
+    const provenance = parsed.success ? checkProvenance(parsed.data, artifact) : null;
+    const valid = parsed.success && provenance?.invalid === false;
     record = {
       id: randomUUID(),
       artifactId: artifact.id,
-      extraction: parsed.success ? parsed.data : null,
+      extraction: valid ? parsed.data : null,
       issues: parsed.success
-        ? approvalIssues(parsed.data)
-        : parsed.error.issues.map(formatIssue),
+        ? [...approvalIssues(parsed.data), ...(provenance?.issues ?? [])]
+        : ["extraction: Modellsvaret följer inte CallOffExtraction-schemat"],
       model: dependencies.gateway.identity,
-      status: parsed.success ? "ready_for_review" : "failed",
+      status: valid ? "ready_for_review" : "failed",
       createdAt: new Date().toISOString(),
     };
-  } catch (error) {
+  } catch {
     record = {
       id: randomUUID(),
       artifactId: artifact.id,
       extraction: null,
-      issues: [error instanceof Error ? error.message : "Okänt extraktionsfel"],
+      issues: ["extraction: Modellanropet misslyckades. Kontrollera modellkonfigurationen och försök igen."],
       model: dependencies.gateway.identity,
       status: "failed",
       createdAt: new Date().toISOString(),

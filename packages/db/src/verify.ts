@@ -11,6 +11,8 @@ import {
   ingressDiscoveries,
   operatorSessions,
   operators,
+  rawArtifactOriginals,
+  rawArtifacts,
 } from "./schema.js";
 
 const localEnvironmentPath = fileURLToPath(new URL("../../../.env", import.meta.url));
@@ -24,6 +26,8 @@ try {
     .from(ingressDiscoveries)
     .limit(1);
   await db.select({ id: operators.id }).from(operators).limit(1);
+  await db.select({ originalAvailable: rawArtifacts.originalAvailable }).from(rawArtifacts).limit(1);
+  await db.select({ artifactId: rawArtifactOriginals.artifactId }).from(rawArtifactOriginals).limit(1);
   await db.select({ tokenHash: operatorSessions.tokenHash }).from(operatorSessions).limit(1);
   await db
     .select({ approvedByOperatorId: callOffs.approvedByOperatorId })

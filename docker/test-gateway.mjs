@@ -39,20 +39,24 @@ const server = createServer(async (request, response) => {
 
   try {
     const body = await readJson(request);
-    const artifactId = body?.source?.artifactId;
+    if (typeof body?.source?.artifactId !== "string") throw new Error("artifact id missing");
+    const mailbox = body.source.content.includes("MAILBOX-ACCEPTANCE");
+    if (mailbox && !body.source.content.includes("MAILBOX-ATTACHMENT")) {
+      throw new Error("mailbox attachment missing");
+    }
     sendJson(response, 200, {
       output: {
         externalRef: null,
         sourceSystem: "docker-test",
-        careProvider: null,
+        careProvider: mailbox ? "Testkommun" : null,
         organizationNumber: null,
         administration: null,
         unit: null,
         requester: null,
-        role: null,
+        role: mailbox ? "Sjuksköterska" : null,
         specialty: null,
         competenceRequirements: [],
-        location: null,
+        location: mailbox ? "Teststad" : null,
         periodStart: null,
         periodEnd: null,
         periodSegments: [],
@@ -71,7 +75,10 @@ const server = createServer(async (request, response) => {
         otherTerms: [],
         confidence: 0.5,
         fieldConfidence: {},
-        fieldProvenance: artifactId === undefined ? {} : { source: [{ artifactId, excerpt: "docker test", locator: null }] },
+        fieldProvenance: mailbox ? Object.fromEntries(
+          [["careProvider", "Testkommun"], ["role", "Sjuksköterska"], ["location", "Teststad"]]
+            .map(([field, excerpt]) => [field, [{ artifactId: body.source.artifactId, excerpt, locator: null }]]),
+        ) : {},
       },
     });
   } catch (error) {

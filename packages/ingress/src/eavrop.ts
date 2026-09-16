@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
 
 const LOGIN_URL = "https://www.e-avrop.com/Login.aspx";
+export const EAVROP_IMPORT_QUEUE = "eavrop.import";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_ATTACHMENTS = 20;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 10_000_000;
@@ -21,9 +22,22 @@ export interface EavropAttachment {
   sourceUrl: string;
 }
 
+export interface EavropAttachmentStatus {
+  detail: string;
+  fileName: string;
+  status:
+    | "downloaded"
+    | "http_error"
+    | "request_failed"
+    | "empty"
+    | "too_large"
+    | "blocked_redirect"
+    | "limit_exceeded";
+}
+
 export interface EavropLogEntry {
   detail: string;
-  status: "ok" | "skipped";
+  status: "ok" | "skipped" | "warning";
   step: "navigate" | "login" | "discover" | "extract" | "attachments";
 }
 
@@ -39,6 +53,7 @@ export interface EavropDiscoveryResult {
 
 export interface EavropFetchResult {
   attachments: EavropAttachment[];
+  attachmentStatuses: EavropAttachmentStatus[];
   externalRef: string | null;
   log: EavropLogEntry[];
   pageText: string;
@@ -104,7 +119,7 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
 
     try {
       browser = await chromium.launch(browserLaunchOptions(this.options));
-      const context = await browser.newContext({ acceptDownloads: false, locale: "sv-SE" });
+      const context = await createRestrictedContext(browser);
       const page = await context.newPage();
       page.setDefaultTimeout(this.timeoutMs);
       page.setDefaultNavigationTimeout(this.timeoutMs);
@@ -113,7 +128,7 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
       log.push({ step: "navigate", status: "ok", detail: "Avropslänken öppnades" });
 
       if (await loginIsVisible(page)) {
-        await login(page, this.credentials, this.timeoutMs);
+        await loginToEavrop(page, this.credentials, this.timeoutMs);
         log.push({ step: "login", status: "ok", detail: "Inloggningen slutfördes" });
 
         if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
@@ -124,15 +139,15 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
       }
 
       validateEavropUrl(page.url());
-      const overviewText = await extractPageText(page);
+      const overviewText = await waitForMeaningfulEavropPageText(page, this.timeoutMs);
       const documentsUrl = await findProcurementDocumentsUrl(page);
       if (documentsUrl !== null) {
         await navigate(page, documentsUrl);
         validateEavropUrl(page.url());
       }
-      const documentsText = documentsUrl === null ? "" : await extractPageText(page);
+      const documentsText = documentsUrl === null ? "" : await extractEavropPageText(page);
       const pageText = [overviewText, documentsText].filter(Boolean).join("\n\n--- Upphandlingsdokument ---\n\n");
-      if (pageText.length < 20) {
+      if (!hasMeaningfulEavropContent(pageText)) {
         throw new EavropAdapterError(
           "e-Avrop-sidan saknar läsbart avropsinnehåll",
           "extract",
@@ -148,23 +163,30 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
             : "Avropstexten och sidan med upphandlingsdokument hämtades",
       });
 
-      const attachments = await downloadAttachments(
+      const { attachments, statuses: attachmentStatuses } = await downloadEavropAttachments(
         page,
         context,
         this.maxAttachments,
         this.maxAttachmentBytes,
+        this.timeoutMs,
       );
+      const failedAttachmentCount = attachmentStatuses.filter(
+        ({ status }) => status !== "downloaded",
+      ).length;
       log.push({
         step: "attachments",
-        status: attachments.length === 0 ? "skipped" : "ok",
+        status: failedAttachmentCount > 0 ? "warning" : attachments.length === 0 ? "skipped" : "ok",
         detail:
-          attachments.length === 0
+          failedAttachmentCount > 0
+            ? `${attachments.length} bilagor hämtades; ${failedAttachmentCount} kunde inte hämtas fullständigt`
+            : attachments.length === 0
             ? "Inga direkt nedladdningsbara bilagor hittades"
             : `${attachments.length} bilagor hämtades`,
       });
 
       return {
         attachments,
+        attachmentStatuses,
         externalRef,
         log,
         pageText,
@@ -190,14 +212,14 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
 
     try {
       browser = await chromium.launch(browserLaunchOptions(this.options));
-      const page = await (await browser.newContext({ acceptDownloads: false, locale: "sv-SE" })).newPage();
+      const page = await (await createRestrictedContext(browser)).newPage();
       page.setDefaultTimeout(this.timeoutMs);
       page.setDefaultNavigationTimeout(this.timeoutMs);
 
       await navigate(page, requestedUrl);
       log.push({ step: "navigate", status: "ok", detail: "Bevakningssidan öppnades" });
       if (await loginIsVisible(page)) {
-        await login(page, this.credentials, this.timeoutMs);
+        await loginToEavrop(page, this.credentials, this.timeoutMs);
         log.push({ step: "login", status: "ok", detail: "Inloggningen slutfördes" });
         if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
           await navigate(page, requestedUrl);
@@ -314,6 +336,46 @@ function browserLaunchOptions(options: EavropPortalAdapterOptions) {
   };
 }
 
+export function findEavropCallOffUrlInEmail(rawEmail: string): string | null {
+  const normalized = rawEmail.replace(/=\r?\n/g, "").replaceAll("&amp;", "&");
+  const candidates = normalized.match(/https:\/\/[^\s<>"']+/gi) ?? [];
+  for (const candidate of candidates) {
+    const value = candidate.replace(/[),.;\]]+$/g, "");
+    try {
+      const url = validateEavropUrl(value);
+      if (isEavropCallOffUrl(url)) return url;
+    } catch {
+      // Tracking links and other external URLs remain inert email data.
+    }
+  }
+  return null;
+}
+
+async function createRestrictedContext(browser: Browser) {
+  const context = await browser.newContext({
+    acceptDownloads: false,
+    locale: "sv-SE",
+    serviceWorkers: "block",
+  });
+  await context.route("**/*", async (route) => {
+    if (isAllowedEavropRequest(route.request().url())) {
+      await route.continue();
+    } else {
+      await route.abort("blockedbyclient");
+    }
+  });
+  return context;
+}
+
+export function isAllowedEavropRequest(value: string) {
+  try {
+    validateEavropUrl(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function installedBrowserPath() {
   if (process.platform !== "win32") return undefined;
   const candidates = [
@@ -339,12 +401,20 @@ async function loginIsVisible(page: Page) {
   return page.locator("#mainContent_ctl00_username").isVisible().catch(() => false);
 }
 
-async function login(page: Page, credentials: EavropCredentials, timeoutMs: number) {
+export async function loginToEavrop(
+  page: Page,
+  credentials: EavropCredentials,
+  timeoutMs: number,
+) {
+  assertEavropCredentialPage(page);
   await page.locator("#mainContent_ctl00_username").fill(credentials.username);
+  assertEavropCredentialPage(page);
   await page.locator("#NextButton").click();
   const password = page.locator("#mainContent_ctl00_password");
   await password.waitFor({ state: "visible" });
+  assertEavropCredentialPage(page);
   await password.fill(credentials.password);
+  assertEavropCredentialPage(page);
   await page.locator("#verify").click();
 
   await Promise.race([
@@ -361,6 +431,7 @@ async function login(page: Page, credentials: EavropCredentials, timeoutMs: numb
       "interaction_required",
     );
   }
+  assertEavropCredentialPage(page);
   if (isLoginUrl(page.url()) || /Inloggning misslyckades/i.test(bodyText)) {
     throw new EavropAdapterError(
       "Inloggningen till e-Avrop misslyckades",
@@ -370,8 +441,54 @@ async function login(page: Page, credentials: EavropCredentials, timeoutMs: numb
   }
 }
 
-async function extractPageText(page: Page) {
-  return page.evaluate(() => {
+function assertEavropCredentialPage(page: Pick<Page, "url">) {
+  try {
+    validateEavropUrl(page.url());
+  } catch (error) {
+    throw new EavropAdapterError(
+      "Inloggningsuppgifter får endast anges på e-avrop.com",
+      "login",
+      "invalid_url",
+      { cause: error },
+    );
+  }
+}
+
+export async function extractEavropPageText(page: Page) {
+  const texts = await Promise.all(
+    eavropSurfaces(page).map((surface) =>
+      extractSurfaceText(surface).catch(() => ""),
+    ),
+  );
+  return [...new Set(texts.filter(Boolean))].join("\n\n--- Inbäddat e-Avrop-innehåll ---\n\n");
+}
+
+async function waitForMeaningfulEavropPageText(page: Page, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  let bestText = "";
+  do {
+    const currentText = await extractEavropPageText(page);
+    if (currentText.length > bestText.length) bestText = currentText;
+    if (hasMeaningfulEavropContent(currentText)) return currentText;
+    await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return bestText;
+}
+
+export function hasMeaningfulEavropContent(value: string) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length < 200) return false;
+  const signals = [
+    /\b(?:avrop|upphandling|anbud|leverantörspool|dynamiskt inköpssystem)\b/i,
+    /\b(?:CPV|referensnummer|diarienummer|kontraktsvärde|sista (?:svars|anbuds)(?:datum|dag))\b/i,
+    /\b20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b/,
+    /\b(?:kommun|region|upphandlande (?:myndighet|organisation)|vårdgivare|beställare)\b/i,
+  ].filter((pattern) => pattern.test(text)).length;
+  return signals >= 2;
+}
+
+async function extractSurfaceText(surface: Page | Frame) {
+  return surface.evaluate(() => {
     const root = document.querySelector("main") ?? document.querySelector("#mainContent") ?? document.body;
     return ((root as HTMLElement).innerText ?? "")
       .replace(/\u0000/g, "")
@@ -383,13 +500,12 @@ async function extractPageText(page: Page) {
 }
 
 async function findProcurementDocumentsUrl(page: Page) {
-  const links = await page.locator("a[href]").evaluateAll((elements) =>
-    elements.map((element) => ({
-      href: element.getAttribute("href") ?? "",
-      text: element.textContent?.replace(/\s+/g, " ").trim() ?? "",
-    })),
-  );
-  return resolveEavropDocumentsUrl(links, page.url());
+  for (const surface of eavropSurfaces(page)) {
+    const links = await surfaceLinks(surface);
+    const documentsUrl = resolveEavropDocumentsUrl(links, surface.url());
+    if (documentsUrl !== null) return documentsUrl;
+  }
+  return null;
 }
 
 export function resolveEavropDocumentsUrl(
@@ -405,50 +521,127 @@ export function isEavropAttachmentCandidate(href: string, linkText: string) {
   return ATTACHMENT_EXTENSIONS.test(href) || ATTACHMENT_EXTENSIONS.test(linkText);
 }
 
-async function downloadAttachments(
+export async function downloadEavropAttachments(
   page: Page,
   context: BrowserContext,
   maxAttachments: number,
   maxAttachmentBytes: number,
+  timeoutMs: number,
 ) {
-  const links = await page.locator("a[href]").evaluateAll((elements) =>
+  const candidates = new Map<string, string>();
+  for (const surface of eavropSurfaces(page)) {
+    const links = await surfaceLinks(surface);
+    for (const link of links) {
+      try {
+        const url = new URL(link.href, surface.url());
+        validateEavropUrl(url.href);
+        if (!isEavropAttachmentCandidate(url.href, link.text)) continue;
+        candidates.set(url.href, link.text);
+      } catch {
+        // Ignore non-URL controls such as ASP.NET postback links.
+      }
+    }
+  }
+
+  const attachments: EavropAttachment[] = [];
+  const statuses: EavropAttachmentStatus[] = [];
+  const entries = [...candidates];
+  for (const [url, linkText] of entries.slice(maxAttachments)) {
+    statuses.push({
+      detail: `Bilagan hoppades över eftersom gränsen är ${maxAttachments}`,
+      fileName: attachmentFileName(undefined, url, linkText),
+      status: "limit_exceeded",
+    });
+  }
+  for (const [url, linkText] of entries.slice(0, maxAttachments)) {
+    const initialFileName = attachmentFileName(undefined, url, linkText);
+    let response;
+    try {
+      response = await context.request.get(url, { timeout: timeoutMs });
+    } catch {
+      statuses.push({
+        detail: "Bilagan kunde inte hämtas",
+        fileName: initialFileName,
+        status: "request_failed",
+      });
+      continue;
+    }
+    if (!response.ok()) {
+      statuses.push({
+        detail: `Bilagan svarade med HTTP ${response.status()}`,
+        fileName: initialFileName,
+        status: "http_error",
+      });
+      continue;
+    }
+    try {
+      validateEavropUrl(response.url());
+    } catch {
+      statuses.push({
+        detail: "Bilagans omdirigering blockerades eftersom den lämnade e-avrop.com",
+        fileName: initialFileName,
+        status: "blocked_redirect",
+      });
+      continue;
+    }
+    const headers = response.headers();
+    const fileName = attachmentFileName(headers["content-disposition"], url, linkText);
+    const declaredSize = Number(headers["content-length"]);
+    if (Number.isFinite(declaredSize) && declaredSize > maxAttachmentBytes) {
+      statuses.push({
+        detail: `Bilagan överskred storleksgränsen ${maxAttachmentBytes} byte`,
+        fileName,
+        status: "too_large",
+      });
+      continue;
+    }
+    let body: Buffer;
+    try {
+      body = await response.body();
+    } catch {
+      statuses.push({
+        detail: "Bilagans innehåll kunde inte läsas",
+        fileName,
+        status: "request_failed",
+      });
+      continue;
+    }
+    if (body.byteLength === 0) {
+      statuses.push({ detail: "Bilagan var tom", fileName, status: "empty" });
+      continue;
+    }
+    if (body.byteLength > maxAttachmentBytes) {
+      statuses.push({
+        detail: `Bilagan överskred storleksgränsen ${maxAttachmentBytes} byte`,
+        fileName,
+        status: "too_large",
+      });
+      continue;
+    }
+    attachments.push({
+      content: body,
+      fileName,
+      mediaType: headers["content-type"]?.split(";", 1)[0] ?? "application/octet-stream",
+      sourceUrl: url,
+    });
+    statuses.push({ detail: "Bilagan hämtades", fileName, status: "downloaded" });
+  }
+  return { attachments, statuses };
+}
+
+function eavropSurfaces(page: Page): Array<Page | Frame> {
+  const frames = typeof page.frames === "function" ? page.frames() : [];
+  const surfaces: Array<Page | Frame> = frames.length === 0 ? [page] : frames;
+  return surfaces.filter((surface) => isAllowedEavropRequest(surface.url()));
+}
+
+async function surfaceLinks(surface: Page | Frame) {
+  return surface.locator("a[href]").evaluateAll((elements) =>
     elements.map((element) => ({
       href: element.getAttribute("href") ?? "",
       text: element.textContent?.replace(/\s+/g, " ").trim() ?? "",
     })),
   );
-  const candidates = new Map<string, string>();
-  for (const link of links) {
-    try {
-      const url = new URL(link.href, page.url());
-      validateEavropUrl(url.href);
-      if (!isEavropAttachmentCandidate(url.href, link.text)) continue;
-      candidates.set(url.href, link.text);
-    } catch {
-      // Ignore non-URL controls such as ASP.NET postback links.
-    }
-  }
-
-  const attachments: EavropAttachment[] = [];
-  for (const [url, linkText] of [...candidates].slice(0, maxAttachments)) {
-    const response = await context.request.get(url, { timeout: DEFAULT_TIMEOUT_MS });
-    if (!response.ok()) continue;
-    try {
-      validateEavropUrl(response.url());
-    } catch {
-      continue;
-    }
-    const body = await response.body();
-    if (body.byteLength === 0 || body.byteLength > maxAttachmentBytes) continue;
-    const headers = response.headers();
-    attachments.push({
-      content: body,
-      fileName: attachmentFileName(headers["content-disposition"], url, linkText),
-      mediaType: headers["content-type"]?.split(";", 1)[0] ?? "application/octet-stream",
-      sourceUrl: url,
-    });
-  }
-  return attachments;
 }
 
 function attachmentFileName(contentDisposition: string | undefined, url: string, linkText: string) {

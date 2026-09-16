@@ -8,6 +8,7 @@ import {
 } from "@staffan/db";
 import {
   ConfiguredHttpModelGateway,
+  EAVROP_IMPORT_QUEUE,
   OpenAiModelGateway,
   PlaywrightEavropPortalAdapter,
   TesseractCliOcrEngine,
@@ -18,7 +19,6 @@ import { readWorkerConfig } from "./config.js";
 import { importEavropDiscovery, pollEavrop } from "./jobs.js";
 
 const POLL_QUEUE = "eavrop.poll";
-const IMPORT_QUEUE = "eavrop.import";
 const localEnvironmentPath = fileURLToPath(new URL("../../../.env", import.meta.url));
 if (existsSync(localEnvironmentPath)) process.loadEnvFile(localEnvironmentPath);
 
@@ -55,36 +55,40 @@ const boss = new PgBoss(databaseUrl);
 boss.on("error", () => console.error("Background worker infrastructure error"));
 
 await boss.start();
-await boss.createQueue(POLL_QUEUE, { policy: "exclusive" });
-await boss.createQueue(IMPORT_QUEUE);
-await boss.schedule(POLL_QUEUE, config.EAVROP_POLL_CRON, {}, {
-  tz: config.EAVROP_POLL_TIME_ZONE,
-});
-
-await boss.work(POLL_QUEUE, async () => {
-  const result = await pollEavrop({
-    discoveryRepository,
-    pollUrl: config.EAVROP_POLL_URL,
-    portal,
-    queue: {
-      async enqueue(discovery) {
-        return boss.send(
-          IMPORT_QUEUE,
-          { discoveryId: discovery.id },
-          {
-            retryBackoff: true,
-            retryDelay: 60,
-            retryLimit: config.WORKER_IMPORT_MAX_ATTEMPTS - 1,
-            singletonKey: discovery.sourceKey,
-          },
-        );
-      },
-    },
+await boss.createQueue(EAVROP_IMPORT_QUEUE);
+const pollUrl = config.EAVROP_POLL_URL;
+if (pollUrl !== undefined) {
+  await boss.createQueue(POLL_QUEUE, { policy: "exclusive" });
+  await boss.schedule(POLL_QUEUE, config.EAVROP_POLL_CRON, {}, {
+    tz: config.EAVROP_POLL_TIME_ZONE,
   });
-  console.log("e-Avrop poll complete", result);
-});
 
-await boss.work<{ discoveryId: string }>(IMPORT_QUEUE, async ([job]) => {
+  await boss.work(POLL_QUEUE, async () => {
+    const result = await pollEavrop({
+      discoveryRepository,
+      pollUrl,
+      portal,
+      queue: {
+        async enqueue(discovery) {
+          return boss.send(
+            EAVROP_IMPORT_QUEUE,
+            { discoveryId: discovery.id },
+            {
+              retryBackoff: true,
+              retryDelay: 60,
+              retryLimit: config.WORKER_IMPORT_MAX_ATTEMPTS - 1,
+              singletonKey: discovery.sourceKey,
+            },
+          );
+        },
+      },
+    });
+    console.log("e-Avrop poll complete", result);
+  });
+  await boss.send(POLL_QUEUE, {}, { singletonKey: "startup" });
+}
+
+await boss.work<{ discoveryId: string }>(EAVROP_IMPORT_QUEUE, async ([job]) => {
   if (job === undefined) return;
   const result = await importEavropDiscovery({
     callOffRepository,
@@ -97,8 +101,6 @@ await boss.work<{ discoveryId: string }>(IMPORT_QUEUE, async ([job]) => {
   });
   console.log("e-Avrop import complete", { status: result.status });
 });
-
-await boss.send(POLL_QUEUE, {}, { singletonKey: "startup" });
 
 async function shutdown() {
   await boss.stop({ graceful: true, timeout: 30_000 });

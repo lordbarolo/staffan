@@ -10,13 +10,22 @@ const base = {
 };
 
 describe("readWorkerConfig", () => {
-  it("requires credentials, a polling URL and an explicit model provider endpoint", () => {
+  it("requires credentials and an explicit model provider endpoint", () => {
     expect(() => readWorkerConfig({})).toThrow();
     expect(readWorkerConfig(base)).toMatchObject({
       EAVROP_POLL_CRON: "*/5 * * * *",
       EAVROP_POLL_TIME_ZONE: "Europe/Stockholm",
       WORKER_IMPORT_MAX_ATTEMPTS: 5,
     });
+  });
+
+  it("starts mailbox consumption without enabling portal polling", () => {
+    const config = readWorkerConfig({
+      EAVROP_USERNAME: base.EAVROP_USERNAME,
+      EAVROP_PASSWORD: base.EAVROP_PASSWORD,
+      MODEL_GATEWAY_URL: base.MODEL_GATEWAY_URL,
+    });
+    expect(config.EAVROP_POLL_URL).toBeUndefined();
   });
 
   it("supports the direct OpenAI provider without a generic gateway URL", () => {
