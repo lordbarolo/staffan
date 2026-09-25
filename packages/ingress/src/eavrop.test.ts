@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BrowserContext, Page } from "playwright";
 
 import {
@@ -6,6 +6,7 @@ import {
   downloadEavropAttachments,
   discoverEavropCallOffLinks,
   EavropAdapterError,
+  ensureRequestedEavropPage,
   extractEavropPageText,
   findEavropCallOffUrlInEmail,
   hasMeaningfulEavropContent,
@@ -53,6 +54,51 @@ describe("e-Avrop adapter boundaries", () => {
       loginToEavrop(page, { username: "synthetic-user", password: "synthetic-password" }, 100),
     ).rejects.toMatchObject({ code: "invalid_url", step: "login" });
     expect(locatorCalls).toBe(0);
+  });
+
+  it("requires manual verification when the procurement challenges after successful login", async () => {
+    const requestedUrl = "https://www.e-avrop.com/notice.aspx?id=42";
+    let currentUrl = "https://www.e-avrop.com/dashboard.aspx";
+    let bodyText = "Inloggningen slutfördes";
+    const goto = vi.fn(async (url: string) => {
+      currentUrl = url;
+      bodyText = "Manuell verifieringskod krävs för att öppna avropet";
+    });
+    const page = {
+      goto,
+      locator: (selector: string) => {
+        if (selector !== "body") throw new Error(`Unexpected selector: ${selector}`);
+        return { innerText: async () => bodyText };
+      },
+      url: () => currentUrl,
+    } as unknown as Page;
+
+    await expect(ensureRequestedEavropPage(page, requestedUrl)).rejects.toMatchObject({
+      code: "interaction_required",
+      message: "e-Avrop kräver manuell verifiering",
+      step: "login",
+    });
+    expect(goto).toHaveBeenCalledWith(requestedUrl, { waitUntil: "domcontentloaded" });
+  });
+
+  it.each([
+    "Verifieringskod krävs",
+    "Tvåfaktor krävs",
+    "CAPTCHA krävs",
+  ])("classifies a post-navigation challenge as interaction_required: %s", async (bodyText) => {
+    const requestedUrl = "https://www.e-avrop.com/notice.aspx?id=42";
+    const page = {
+      locator: (selector: string) => {
+        if (selector !== "body") throw new Error(`Unexpected selector: ${selector}`);
+        return { innerText: async () => bodyText };
+      },
+      url: () => requestedUrl,
+    } as unknown as Page;
+
+    await expect(ensureRequestedEavropPage(page, requestedUrl)).rejects.toMatchObject({
+      code: "interaction_required",
+      message: "e-Avrop kräver manuell verifiering",
+    });
   });
 
   it("derives a stable external reference without retaining the whole URL", () => {

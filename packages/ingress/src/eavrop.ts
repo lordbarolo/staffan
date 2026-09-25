@@ -130,20 +130,17 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
       if (await loginIsVisible(page)) {
         await loginToEavrop(page, this.credentials, this.timeoutMs);
         log.push({ step: "login", status: "ok", detail: "Inloggningen slutfördes" });
-
-        if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
-          await navigate(page, requestedUrl);
-        }
       } else {
         log.push({ step: "login", status: "skipped", detail: "Sidan krävde ingen ny inloggning" });
       }
 
-      validateEavropUrl(page.url());
+      await ensureRequestedEavropPage(page, requestedUrl);
       const overviewText = await waitForMeaningfulEavropPageText(page, this.timeoutMs);
       const documentsUrl = await findProcurementDocumentsUrl(page);
       if (documentsUrl !== null) {
         await navigate(page, documentsUrl);
         validateEavropUrl(page.url());
+        await assertNoEavropInteractionChallenge(page);
       }
       const documentsText = documentsUrl === null ? "" : await extractEavropPageText(page);
       const pageText = [overviewText, documentsText].filter(Boolean).join("\n\n--- Upphandlingsdokument ---\n\n");
@@ -221,14 +218,11 @@ export class PlaywrightEavropPortalAdapter implements EavropPortal {
       if (await loginIsVisible(page)) {
         await loginToEavrop(page, this.credentials, this.timeoutMs);
         log.push({ step: "login", status: "ok", detail: "Inloggningen slutfördes" });
-        if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
-          await navigate(page, requestedUrl);
-        }
       } else {
         log.push({ step: "login", status: "skipped", detail: "Sidan krävde ingen ny inloggning" });
       }
 
-      validateEavropUrl(page.url());
+      await ensureRequestedEavropPage(page, requestedUrl);
       const links = await page.locator("a[href]").evaluateAll((elements) =>
         elements.map((element) => ({ href: element.getAttribute("href") ?? "" })),
       );
@@ -423,14 +417,7 @@ export async function loginToEavrop(
     page.getByText(/verifieringskod|tvåfaktor|captcha/i).waitFor({ state: "visible", timeout: timeoutMs }),
   ]).catch(() => undefined);
 
-  const bodyText = await page.locator("body").innerText().catch(() => "");
-  if (/verifieringskod|tvåfaktor|captcha/i.test(bodyText)) {
-    throw new EavropAdapterError(
-      "e-Avrop kräver manuell verifiering",
-      "login",
-      "interaction_required",
-    );
-  }
+  const bodyText = await assertNoEavropInteractionChallenge(page);
   assertEavropCredentialPage(page);
   if (isLoginUrl(page.url()) || /Inloggning misslyckades/i.test(bodyText)) {
     throw new EavropAdapterError(
@@ -439,6 +426,26 @@ export async function loginToEavrop(
       "authentication_failed",
     );
   }
+}
+
+export async function ensureRequestedEavropPage(page: Page, requestedUrl: string) {
+  if (normalizeUrl(page.url()) !== requestedUrl && !isLoginUrl(requestedUrl)) {
+    await navigate(page, requestedUrl);
+  }
+  validateEavropUrl(page.url());
+  await assertNoEavropInteractionChallenge(page);
+}
+
+async function assertNoEavropInteractionChallenge(page: Page) {
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  if (/verifieringskod|tvåfaktor|captcha/i.test(bodyText)) {
+    throw new EavropAdapterError(
+      "e-Avrop kräver manuell verifiering",
+      "login",
+      "interaction_required",
+    );
+  }
+  return bodyText;
 }
 
 function assertEavropCredentialPage(page: Pick<Page, "url">) {

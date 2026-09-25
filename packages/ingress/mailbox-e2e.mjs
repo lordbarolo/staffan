@@ -37,8 +37,10 @@ async function deliver(body) {
 async function waitForDiscovery(id, status) {
   for (let attempt = 0; attempt < 90; attempt++) {
     const [row] = await client`select * from ingress_discoveries where id = ${id}`;
+    if (status !== "failed") {
+      assert.notEqual(row?.status, "failed", "unexpected terminal import failure");
+    }
     if (row?.status === status) return row;
-    assert.notEqual(row?.status, "failed", "unexpected terminal import failure");
     await delay(1000);
   }
   throw new Error(`Timed out waiting for discovery state ${status}`);
