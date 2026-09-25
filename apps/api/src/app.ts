@@ -5,14 +5,17 @@ import {
   ApprovalValidationError,
   checkDatabase,
   type IngressDiscoveryRecord,
+  type IngressDiscoveryRepository,
   type OperatorIdentity,
   type ReviewRecord,
 } from "@staffan/db";
 import {
   EavropAdapterError,
   PdfTextExtractionError,
+  deriveEavropExternalRef,
   eavropContent,
   extractPdfText,
+  findEavropCallOffUrlInEmail,
   processCallOff,
   type CallOffReviewRepository,
   type EavropFetchResult,
@@ -20,6 +23,7 @@ import {
   type IntakeResult,
   type ModelGateway,
   type OcrEngine,
+  type RawArtifactOriginal,
 } from "@staffan/ingress";
 import Fastify from "fastify";
 import { z } from "zod";
@@ -41,30 +45,57 @@ export interface CallOffApiRepository extends CallOffReviewRepository {
     approvedByOperatorId: string,
   ): Promise<unknown>;
   getReview(extractionId: string): Promise<ReviewRecord | null>;
+  getOriginalArtifact(extractionId: string): Promise<
+    | (RawArtifactOriginal & { fileName: string; mediaType: string })
+    | null
+  >;
   listReviews(): Promise<ReviewRecord[]>;
 }
 
 export interface CallOffDependencies {
-  discoveryRepository?: { list(limit?: number): Promise<IngressDiscoveryRecord[]> };
+  discoveryRepository?: Pick<
+    IngressDiscoveryRepository,
+    "list" | "markQueued" | "register"
+  >;
   eavrop?: EavropPortal;
   gateway: ModelGateway;
   ocr?: OcrEngine;
   repository: CallOffApiRepository;
 }
 
+export interface MailboxIngressDependencies {
+  queue: {
+    enqueue(discovery: IngressDiscoveryRecord): Promise<string | null>;
+  };
+  token?: string;
+}
+
 export function buildApp(
   databaseCheck: DatabaseCheck = checkDatabase,
   callOffDependencies?: CallOffDependencies,
   auth?: { cookieSecure: boolean; service: AuthService },
+  mailboxIngress?: MailboxIngressDependencies,
 ) {
   const app = Fastify({ logger: false });
   app.decorateRequest("operator", null);
 
   void app.register(multipart, { limits: { fileSize: 10_000_000, files: 1 } });
+  app.addContentTypeParser(
+    "message/rfc822",
+    { bodyLimit: 2_000_000, parseAs: "string" },
+    (_request, body, done) => done(null, body),
+  );
 
   app.addHook("onRequest", async (request, reply) => {
     const route = request.url.split("?", 1)[0];
     if (route === "/health" || route === "/auth/login") return;
+    if (
+      route === "/call-offs/import-eavrop-email" &&
+      mailboxIngress?.token !== undefined &&
+      request.headers.authorization === `Bearer ${mailboxIngress.token}`
+    ) {
+      return;
+    }
     if (auth === undefined) {
       return reply.status(503).send({ error: "Autentisering är inte konfigurerad" });
     }
@@ -139,6 +170,25 @@ export function buildApp(
     }
   });
 
+  app.get("/call-offs/reviews/:id/original", async (request, reply) => {
+    if (callOffDependencies === undefined) return unavailable(reply);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    try {
+      const original = await callOffDependencies.repository.getOriginalArtifact(id);
+      if (original === null) return reply.status(404).send({ error: "Originalfilen finns inte" });
+      if (original.mediaType !== "application/pdf") {
+        return reply.status(415).send({ error: "Originalformatet kan inte visas" });
+      }
+      reply.header("cache-control", "no-store");
+      reply.header("content-disposition", `inline; filename="${safeDownloadName(original.fileName)}"`);
+      reply.header("x-content-type-options", "nosniff");
+      return reply.type(original.mediaType).send(Buffer.from(original.content));
+    } catch (error) {
+      app.log.error({ error }, "Could not read original artifact");
+      return reply.status(503).send({ error: "Databasen är inte tillgänglig" });
+    }
+  });
+
   app.post("/call-offs/import-text", async (request, reply) => {
     if (callOffDependencies === undefined) return unavailable(reply);
     const body = z
@@ -183,6 +233,7 @@ export function buildApp(
             content: parsed.text,
             fileName: upload.filename,
             mediaType: upload.mimetype,
+            originalContent: data,
             sourceSystem: "pdf-upload",
             sourceType: "pdf",
           },
@@ -250,12 +301,59 @@ export function buildApp(
         ...result,
         portal: {
           attachmentCount: portalResult.attachments.length,
+          attachmentStatuses: portalResult.attachmentStatuses,
           log: portalResult.log,
         },
       });
     } catch (error) {
       app.log.error({ error }, "Could not persist e-Avrop intake");
       return reply.status(503).send({ error: "Databasen är inte tillgänglig" });
+    }
+  });
+
+  app.post("/call-offs/import-eavrop-email", async (request, reply) => {
+    if (callOffDependencies === undefined) return unavailable(reply);
+    if (
+      callOffDependencies.discoveryRepository === undefined ||
+      mailboxIngress === undefined
+    ) {
+      return reply.status(503).send({ error: "Mailbox-ingress är inte konfigurerad" });
+    }
+    const rawEmail = typeof request.body === "string"
+      ? z.string().trim().min(1).max(2_000_000).parse(request.body)
+      : z.object({ rawEmail: z.string().trim().min(1).max(2_000_000) }).parse(request.body).rawEmail;
+    const sourceUrl = findEavropCallOffUrlInEmail(rawEmail);
+    if (sourceUrl === null) {
+      return reply.status(422).send({
+        error: "E-postmeddelandet innehåller ingen giltig e-Avrop-länk; manuell kontroll krävs",
+      });
+    }
+
+    try {
+      const discovery = await callOffDependencies.discoveryRepository.register({
+        externalRef: deriveEavropExternalRef(sourceUrl),
+        sourceUrl,
+      });
+      let queued = false;
+      if (discovery.status === "discovered" || discovery.status === "queued") {
+        const jobId = await mailboxIngress.queue.enqueue(discovery);
+        queued = jobId !== null;
+        await callOffDependencies.discoveryRepository.markQueued(discovery.id);
+      }
+      return reply.status(202).send({
+        discovery: {
+          id: discovery.id,
+          status: discovery.status === "discovered" ? "queued" : discovery.status,
+          sourceSystem: "e-avrop",
+          sourceUrl,
+        },
+        queued,
+      });
+    } catch (error) {
+      app.log.error({ error }, "Could not register or queue e-Avrop email intake");
+      return reply.status(503).send({
+        error: "Avropsmailet kunde inte registreras eller köas; manuell kontroll krävs",
+      });
     }
   });
 
@@ -301,6 +399,10 @@ async function runIntake(
 
 function unavailable(reply: { status(code: number): { send(body: unknown): unknown } }) {
   return reply.status(503).send({ error: "CallOff-tjänsten är inte konfigurerad" });
+}
+
+function safeDownloadName(value: string) {
+  return value.replace(/[\r\n"\\/]/g, "_").slice(0, 255) || "original.pdf";
 }
 
 function readCookie(header: string | undefined, name: string) {

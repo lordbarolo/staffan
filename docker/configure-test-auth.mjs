@@ -5,6 +5,7 @@ const environmentFile = process.env.GITHUB_ENV;
 if (!environmentFile) throw new Error("GITHUB_ENV saknas");
 
 const password = randomBytes(24).toString("base64url");
+const mailboxToken = randomBytes(32).toString("base64url");
 const salt = randomBytes(16);
 const hash = scryptSync(password, salt, 64, { N: 16_384, p: 1, r: 8 });
 const encodedHash = [
@@ -17,8 +18,9 @@ const encodedHash = [
 ].join(":");
 
 console.log(`::add-mask::${password}`);
+console.log(`::add-mask::${mailboxToken}`);
 appendFileSync(
   environmentFile,
-  `OPERATOR_USERNAME=ci-operator\nOPERATOR_PASSWORD=${password}\nOPERATOR_PASSWORD_HASH=${encodedHash}\n`,
+  `OPERATOR_USERNAME=ci-operator\nOPERATOR_PASSWORD=${password}\nOPERATOR_PASSWORD_HASH=${encodedHash}\nMAILBOX_INGRESS_TOKEN=${mailboxToken}\n`,
   "utf8",
 );

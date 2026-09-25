@@ -11,6 +11,7 @@ import {
   type CallOffReviewRepository,
   type ExtractionRecord,
   type ModelGateway,
+  type RawArtifactOriginal,
 } from "./index.js";
 import { expectedKarlstadExtraction, karlstadRawText } from "../test-fixtures/karlstad-calloff.js";
 import {
@@ -59,9 +60,11 @@ afterEach(() => vi.unstubAllGlobals());
 
 class MemoryRepository implements CallOffReviewRepository {
   artifacts: RawArtifact[] = [];
+  originals: RawArtifactOriginal[] = [];
   extractions: ExtractionRecord[] = [];
-  async saveArtifact(artifact: RawArtifact) {
+  async saveArtifact(artifact: RawArtifact, original?: RawArtifactOriginal) {
     this.artifacts.push(artifact);
+    if (original !== undefined) this.originals.push(original);
   }
   async saveExtraction(extraction: ExtractionRecord) {
     this.extractions.push(extraction);
@@ -78,6 +81,27 @@ function gatewayFor(output: (artifactId: string) => unknown): ModelGateway {
 }
 
 describe("quarantine and extraction pipeline", () => {
+  it("preserves an immutable PDF original separately from extracted review text", async () => {
+    const repository = new MemoryRepository();
+    const originalContent = new TextEncoder().encode("%PDF-1.7 synthetic original bytes");
+    await processCallOff(
+      {
+        content: karlstadRawText,
+        fileName: "avrop.pdf",
+        mediaType: "application/pdf",
+        originalContent,
+        sourceSystem: "pdf-upload",
+        sourceType: "pdf",
+      },
+      { repository, gateway: gatewayFor(expectedKarlstadExtraction) },
+    );
+
+    expect(repository.originals).toHaveLength(1);
+    expect(repository.originals[0]?.content).toEqual(originalContent);
+    expect(repository.originals[0]?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(repository.artifacts[0]?.content).toBe(karlstadRawText);
+  });
+
   it("keeps page-one omissions explicit for the second municipal call-off", async () => {
     const repository = new MemoryRepository();
     const result = await processCallOff(
@@ -94,6 +118,7 @@ describe("quarantine and extraction pipeline", () => {
       },
     );
 
+    expect(result.extraction.status, result.extraction.issues.join("\n")).toBe("ready_for_review");
     expect(result.extraction.extraction).toEqual(expectedEslovExtraction(result.artifact.id, false));
     expect(result.extraction.extraction?.scope).toBeNull();
     expect(result.extraction.extraction?.requiredDocuments).toEqual([]);
@@ -116,6 +141,7 @@ describe("quarantine and extraction pipeline", () => {
       },
     );
 
+    expect(result.extraction.status, result.extraction.issues.join("\n")).toBe("ready_for_review");
     const extraction = result.extraction.extraction;
     expect(extraction).toEqual(expectedEslovExtraction(result.artifact.id, true));
     expect(result.extraction.issues).toEqual([]);
@@ -149,7 +175,7 @@ describe("quarantine and extraction pipeline", () => {
     expect(result.extraction.extraction?.preferences).toEqual(["Cykelvana är önskvärd"]);
   });
 
-  it("processes ten representative anonymised call-offs end-to-end", async () => {
+  it("keeps ten synthetic schema variants separate from historical acceptance evidence", async () => {
     const repository = new MemoryRepository();
     const variants = [
       ["Sjuksköterska", "Dag och kväll"],
@@ -186,7 +212,9 @@ describe("quarantine and extraction pipeline", () => {
         },
       );
       expect(result.extraction.status).toBe("ready_for_review");
-      expect(result.extraction.issues).toEqual([]);
+      expect(result.extraction.issues).toContain(
+        "careProvider: Källhänvisning saknas; kontrollera värdet manuellt mot råkällan",
+      );
       const extraction = result.extraction.extraction;
       expect(extraction).not.toBeNull();
       if (extraction === null) throw new Error("Testextraktionen saknas");
@@ -237,6 +265,78 @@ describe("quarantine and extraction pipeline", () => {
     expect(result.extraction.status).toBe("failed");
     expect(result.extraction.extraction).toBeNull();
     expect(result.extraction.issues.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    {
+      name: "a foreign artifact id",
+      source: {
+        artifactId: "00000000-0000-4000-8000-000000000099",
+        excerpt: "Roll: Sjuksköterska",
+        locator: "rad 1",
+      },
+    },
+    {
+      name: "an excerpt that is absent from the current artifact",
+      source: {
+        artifactId: "current",
+        excerpt: "Påhittat citat som inte finns",
+        locator: "rad 99",
+      },
+    },
+  ])("rejects provenance bound to $name", async ({ source }) => {
+    const repository = new MemoryRepository();
+    const result = await processCallOff(
+      {
+        content: "Roll: Sjuksköterska\nSchema: Dagtid",
+        mediaType: "text/plain",
+        sourceSystem: "manual",
+        sourceType: "raw_text",
+      },
+      {
+        repository,
+        gateway: gatewayFor((artifactId) => ({
+          ...completeExtraction,
+          sourceSystem: "manual",
+          fieldProvenance: {
+            role: [{ ...source, artifactId: source.artifactId === "current" ? artifactId : source.artifactId }],
+          },
+        })),
+      },
+    );
+
+    expect(result.extraction.status).toBe("failed");
+    expect(result.extraction.extraction).toBeNull();
+    expect(result.extraction.issues).toContain(
+      "role: Källhänvisningen saknar ett ordagrant citat i den aktuella råkällan",
+    );
+  });
+
+  it("does not persist raw gateway errors that may contain secrets", async () => {
+    const repository = new MemoryRepository();
+    const result = await processCallOff(
+      {
+        content: "Fullständigt syntetiskt avropsunderlag för test.",
+        mediaType: "text/plain",
+        sourceSystem: "manual",
+        sourceType: "raw_text",
+      },
+      {
+        repository,
+        gateway: {
+          identity: { provider: "fixture", name: "failing", version: "1" },
+          async extractCallOff() {
+            throw new Error("Authorization: Bearer super-secret-token");
+          },
+        },
+      },
+    );
+
+    expect(result.extraction.status).toBe("failed");
+    expect(result.extraction.issues).toEqual([
+      "extraction: Modellanropet misslyckades. Kontrollera modellkonfigurationen och försök igen.",
+    ]);
+    expect(JSON.stringify(result.extraction)).not.toContain("super-secret-token");
   });
 
   it("preserves multiple periods, work weeks and explicit shall/should classification", async () => {

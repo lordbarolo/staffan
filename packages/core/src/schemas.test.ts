@@ -123,6 +123,29 @@ describe("CallOff schemas", () => {
     ).toBe(false);
   });
 
+  it("rejects whitespace-only required approval fields from direct API callers", () => {
+    for (const patch of [
+      { careProvider: "   " },
+      { role: "\t" },
+      { location: "\r\n" },
+      { schedule: "  " },
+      { scope: { consultantCount: null, description: "   " } },
+    ]) {
+      expect(callOffApprovalSchema.safeParse({ ...completeFields, ...patch }).success).toBe(false);
+    }
+  });
+
+  it("trims non-empty approval strings at the schema boundary", () => {
+    const parsed = callOffApprovalSchema.parse({
+      ...completeFields,
+      careProvider: "  Exempel kommun  ",
+      scope: { consultantCount: null, description: "  Heltid  " },
+    });
+
+    expect(parsed.careProvider).toBe("Exempel kommun");
+    expect(parsed.scope?.description).toBe("Heltid");
+  });
+
   it("rejects impossible calendar dates", () => {
     expect(
       callOffApprovalSchema.safeParse({

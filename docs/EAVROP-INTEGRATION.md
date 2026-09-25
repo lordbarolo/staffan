@@ -1,7 +1,7 @@
 # e-Avrop integration
 
-**Status:** Slice 2 import verified; OCR and continuous polling implemented locally 2026-09-05
-**Scope:** Read-only direct and scheduled import of e-Avrop procurements into the existing CallOff review flow
+**Status:** Slice 2 implemented; full mailbox acceptance is enforced in CI before merge
+**Scope:** Read-only mailbox, direct and scheduled import of e-Avrop procurements into the existing CallOff review flow
 
 ## Purpose and boundaries
 
@@ -22,6 +22,29 @@ e-Avrop URL
   -> review screen
   -> human correction and approval
 ```
+
+The Slice 2 mailbox ingress accepts JSON containing `rawEmail` or a raw RFC 822
+message through `POST /call-offs/import-eavrop-email`. A mailbox forwarder can
+authenticate with `MAILBOX_INGRESS_TOKEN`; a signed-in operator can use the same
+route as a manual fallback. The message remains untrusted data. Staffan selects
+only a canonical HTTPS call-off URL on `e-avrop.com`, registers the stable source
+key in the existing discovery table and enqueues the existing `eavrop.import`
+worker job. Repeated mail for the same avrop therefore reuses the same discovery
+and pg-boss singleton instead of creating another CallOff pipeline.
+
+```text
+incoming mail
+  -> authenticated mailbox endpoint
+  -> e-Avrop source detection + canonical URL
+  -> existing ingress discovery + stable source key
+  -> existing eavrop.import queue
+  -> PlaywrightEavropPortalAdapter
+  -> page text + attachments
+  -> shared CallOff extraction
+  -> in_review or visible failed state
+```
+
+The endpoint never follows tracking links and never approves a CallOff.
 
 The optional continuous path reuses the same pipeline:
 
@@ -60,10 +83,11 @@ Optional:
 
 - `EAVROP_BROWSER_EXECUTABLE_PATH` when Chrome, Edge, or Chromium cannot be discovered automatically
 - `OCR_TESSERACT_PATH` when the `tesseract` executable cannot be discovered automatically
+- `MAILBOX_INGRESS_TOKEN`, at least 32 random characters, when a mailbox forwarder posts incoming RFC 822 mail directly to the API
 
-Required for the separate background worker:
+Optional portal polling for the separate background worker:
 
-- `EAVROP_POLL_URL`, the authenticated e-Avrop list page to observe
+- `EAVROP_POLL_URL`, the authenticated e-Avrop list page to observe. Omit it for mailbox-only consumption; the worker still consumes `eavrop.import`.
 
 Optional worker controls:
 
@@ -85,7 +109,7 @@ Never place actual values in this document, `.env.example`, tests, logs, screens
 
 The adapter may download legacy DOC/XLS or ZIP links, but those formats are not text-decoded by the current pipeline. Unsupported formats remain visible as attachment placeholders instead of being silently treated as parsed text.
 
-Default safety limits are 20 attachments, 10 MB per attachment, and 200,000 extracted characters per attachment. Only HTTPS URLs on `e-avrop.com` and its subdomains are accepted.
+Default safety limits are 20 attachments, 10 MB per attachment, and 200,000 extracted characters per attachment. Only HTTPS URLs on `e-avrop.com` and its subdomains are accepted. Browser requests outside that boundary are blocked, and the current page URL is revalidated before every credential step.
 
 ## Failure behavior
 
@@ -93,7 +117,8 @@ Default safety limits are 20 attachments, 10 MB per attachment, and 200,000 extr
 - Invalid or non-e-Avrop URLs return a validation error.
 - Failed authentication and portal navigation report the failed adapter step.
 - CAPTCHA or two-factor challenges report that manual interaction is required.
-- Unreadable attachments remain visible in the source material with a parsing marker.
+- Every discovered attachment receives an individual status. HTTP errors, blocked redirects, empty responses, size-limit failures, request failures, and attachments beyond the count limit remain visible as an incomplete-source warning.
+- Unreadable downloaded attachments remain visible in the source material with a parsing marker.
 - Database or persistence failures return an explicit service error.
 - Repeated background-import failures stop in a visible `failed` state after the configured attempt limit.
 
@@ -105,7 +130,30 @@ No credentials or downloaded source documents are part of the repository. This i
 
 Automated coverage includes:
 
+The Docker CI job runs `packages/ingress/mailbox-e2e.mjs` against the built API,
+worker and web with PostgreSQL 16 and pg-boss. It delivers concurrent RFC 822
+messages to the mailbox endpoint, performs a real Playwright login and HTTPS
+attachment download from an isolated portal fixture, validates stored extraction,
+and opens the review in Chromium. Redelivery must preserve one artifact/review;
+a manual-verification challenge must be visible in the discovery UI; approval
+count must remain zero. The portal and model responses are deterministic test
+fixtures. This proves integration, not current live e-Avrop availability or model quality.
+
+The fixture certificate and mailbox token are ephemeral CI values. The test-only
+Chromium wrapper is mounted solely by `compose.verify.yaml`; production browser
+settings and trust are unchanged. The certificate directory is supplied through
+`MAILBOX_TEST_CERT_DIR`. After preparing the CI test environment, run:
+
+```text
+docker compose -f compose.verify.yaml up --build --detach
+docker compose -f compose.verify.yaml run --build --rm mailbox-acceptance
+```
+
 - e-Avrop URL and credential boundaries
+- negative redirect handling before credentials and an e-Avrop-only browser request boundary
+- raw-email source identification without accepting tracking or foreign links
+- authenticated RFC 822 mailbox intake, stable source deduplication and queue handoff
+- representative mailbox-to-portal-to-attachment-to-review application E2E
 - procurement-document link resolution and attachment filtering
 - spreadsheet extraction with unknown media type
 - API import through the existing review pipeline
@@ -116,6 +164,9 @@ Automated coverage includes:
 - multiple period segments and calendar weeks, including unknown week years
 - structured classification of explicit shall and should requirements
 - scheduled discovery, queueing, idempotent source keys, retries, and exception state
+- conditional PostgreSQL queue transitions, simultaneous approval idempotency, and upgrade with historical duplicate approvals in CI
+- browser import, operator correction, and approval in the Docker CI stack
+- authenticated PDF-original retrieval for review
 
 Run the complete local verification from the repository root:
 
@@ -124,9 +175,11 @@ cd C:\Github\Staffan
 pnpm check
 ```
 
-## Known limitations and next work
+## Non-blocking backlog
 
-- Background polling requires an explicit list-page URL; mailbox-triggered discovery is not included.
+- Provider-specific pull connectors or polling for IMAP, Microsoft Graph or Gmail can be added if deployment cannot forward incoming mail to the provider-neutral endpoint. This is not required for the Slice 2 inbound-mail path.
+- The current import accepts decoded mail text/HTML and plain RFC 822 bodies with direct URLs. A forwarder must decode base64/quoted-printable MIME parts before sending JSON `rawEmail`; a complete MIME reader and tracking-link resolution are follow-up work.
+- Background polling remains explicit opt-in code. It belongs to Slice 6 and is not evidence that the Slice 2 email requirement or live-portal acceptance has passed.
 - Portal markup and login behavior can change and require adapter maintenance.
 - CAPTCHA and two-factor challenges are not bypassed.
 - OCR quality depends on scan resolution and still requires human comparison with the rendered source.
