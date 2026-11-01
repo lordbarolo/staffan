@@ -6,7 +6,7 @@ const workerConfigSchema = z
     EAVROP_PASSWORD: z.string().min(1),
     EAVROP_POLL_CRON: z.string().min(1).default("*/5 * * * *"),
     EAVROP_POLL_TIME_ZONE: z.string().min(1).default("Europe/Stockholm"),
-    EAVROP_POLL_URL: z.url().max(2_000),
+    EAVROP_POLL_URL: z.url().max(2_000).optional(),
     EAVROP_USERNAME: z.string().min(1),
     MODEL_GATEWAY_TOKEN: z.string().min(1).optional(),
     MODEL_GATEWAY_URL: z.url().optional(),

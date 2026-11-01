@@ -15,6 +15,9 @@ describe("document extraction", () => {
       sourceUrl: "https://www.e-avrop.com/notice.aspx?id=42",
       externalRef: "42",
       pageText: "Avrop",
+      attachmentStatuses: [
+        { detail: "Bilagan hämtades", fileName: "Anbudsinbjudan.xlsx", status: "downloaded" },
+      ],
       attachments: [
         {
           sourceUrl: "https://www.e-avrop.com/AttachmentDispatcher.aspx?id=1",
@@ -29,6 +32,27 @@ describe("document extraction", () => {
     expect(result).toContain("Arbetsblad: Behov");
     expect(result).toContain("Roll\tSjuksköterska");
     expect(result).toContain("Omfattning\t100 %");
+  });
+
+  it("keeps an individual warning when an attachment could not be downloaded", async () => {
+    const content = await eavropContent({
+      sourceUrl: "https://www.e-avrop.com/notice.aspx?id=43",
+      externalRef: "43",
+      pageText: "Avrop om sjuksköterska med fullständigt portalunderlag.",
+      attachments: [],
+      attachmentStatuses: [
+        {
+          detail: "Bilagan svarade med HTTP 404",
+          fileName: "kravspecifikation.pdf",
+          status: "http_error",
+        },
+      ],
+      log: [],
+    });
+
+    expect(content).toContain("OFULLSTÄNDIGT BILAGEUNDERLAG");
+    expect(content).toContain("kravspecifikation.pdf");
+    expect(content).toContain("HTTP 404");
   });
 
   it("runs OCR only for image-based pages and keeps embedded text from other pages", async () => {

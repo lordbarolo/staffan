@@ -26,6 +26,7 @@ jobs:
       DATABASE_URL: postgres://staffan:staffan@localhost:5432/staffan
       INTERNAL_API_URL: http://127.0.0.1:3001
       MODEL_GATEWAY_URL: http://127.0.0.1:4100/extract
+      STAFFAN_RUN_DB_INTEGRATION_TESTS: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -58,10 +59,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium for browser acceptance
+        run: pnpm --filter @staffan/ingress exec playwright install --with-deps chromium
       - name: Configure ephemeral test operator
         run: node docker/configure-test-auth.mjs
       - name: Build the background worker runtime
         run: docker build --target worker .
+      - name: Create isolated portal fixture certificate
+        run: |
+          cert_dir=$(mktemp -d)
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem" \
+            -subj '/CN=mailbox-fixture.e-avrop.com' \
+            -addext 'subjectAltName=DNS:mailbox-fixture.e-avrop.com'
+          chmod 755 "$cert_dir" docker/test-chromium.sh
+          chmod 644 "$cert_dir/cert.pem"
+          echo "MAILBOX_TEST_CERT_DIR=$cert_dir" >> "$GITHUB_ENV"
       - name: Build and start the full Docker stack
         run: docker compose -f compose.verify.yaml up --build --detach
       - name: Verify containerized health and model intake
@@ -79,6 +100,15 @@ jobs:
             -H 'content-type: application/json' \
             -d '{"content":"Docker-verifiering","sourceSystem":"ci"}' \
             http://127.0.0.1:3001/call-offs/import-text | grep 'ready_for_review'
+      - name: Verify browser import, correction and approval
+        env:
+          WEB_BASE_URL: http://127.0.0.1:3000
+        run: pnpm e2e:browser
+      - name: Accept mailbox through PostgreSQL queue and worker to browser review
+        run: docker compose -f compose.verify.yaml run --build --rm mailbox-acceptance
+      - name: Show acceptance diagnostics on failure
+        if: failure()
+        run: docker compose -f compose.verify.yaml logs --tail=80 worker api portal-fixture
       - name: Tear down Docker stack
         if: always()
         run: docker compose -f compose.verify.yaml down --volumes --remove-orphans

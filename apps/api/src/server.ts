@@ -9,10 +9,12 @@ import {
 } from "@staffan/db";
 import {
   ConfiguredHttpModelGateway,
+  EAVROP_IMPORT_QUEUE,
   OpenAiModelGateway,
   PlaywrightEavropPortalAdapter,
   TesseractCliOcrEngine,
 } from "@staffan/ingress";
+import { PgBoss } from "pg-boss";
 
 import { buildApp } from "./app.js";
 import { createAuthService } from "./auth.js";
@@ -32,6 +34,10 @@ const authService = createAuthService(authRepository, {
 });
 const repository = createPostgresCallOffRepository(readDatabaseUrl());
 const discoveryRepository = createPostgresIngressDiscoveryRepository(readDatabaseUrl());
+const boss = new PgBoss(readDatabaseUrl());
+boss.on("error", () => console.error("Mailbox queue infrastructure error"));
+await boss.start();
+await boss.createQueue(EAVROP_IMPORT_QUEUE);
 const gateway =
   config.MODEL_PROVIDER === "openai"
     ? new OpenAiModelGateway(
@@ -66,8 +72,27 @@ const app = buildApp(undefined, {
   repository,
   discoveryRepository,
   ...(eavrop === undefined ? {} : { eavrop }),
-}, { cookieSecure: config.AUTH_COOKIE_SECURE, service: authService });
+}, { cookieSecure: config.AUTH_COOKIE_SECURE, service: authService }, {
+  queue: {
+    async enqueue(discovery) {
+      return boss.send(
+        EAVROP_IMPORT_QUEUE,
+        { discoveryId: discovery.id },
+        {
+          retryBackoff: true,
+          retryDelay: 60,
+          retryLimit: 4,
+          singletonKey: discovery.sourceKey,
+        },
+      );
+    },
+  },
+  ...(config.MAILBOX_INGRESS_TOKEN === undefined
+    ? {}
+    : { token: config.MAILBOX_INGRESS_TOKEN }),
+});
 app.addHook("onClose", async () => {
+  await boss.stop({ graceful: true, timeout: 30_000 });
   await Promise.all([authRepository.close(), repository.close(), discoveryRepository.close()]);
 });
 

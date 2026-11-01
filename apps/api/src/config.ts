@@ -10,6 +10,7 @@ const apiConfigSchema = z.object({
   EAVROP_BROWSER_EXECUTABLE_PATH: z.string().min(1).optional(),
   EAVROP_PASSWORD: z.string().min(1).optional(),
   EAVROP_USERNAME: z.string().min(1).optional(),
+  MAILBOX_INGRESS_TOKEN: z.string().min(32).optional(),
   MODEL_PROVIDER: z.enum(["http", "openai"]).default("http"),
   MODEL_GATEWAY_URL: z.url().optional(),
   MODEL_GATEWAY_TOKEN: z.string().min(1).optional(),

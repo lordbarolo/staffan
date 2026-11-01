@@ -1,5 +1,5 @@
 import { getHealth } from "./health";
-import { approveCallOff, importEavrop, importPdf, importText } from "./actions";
+import { approveCallOff, importEavrop, importEavropEmail, importPdf, importText } from "./actions";
 import { authenticatedApiFetch, requireOperator } from "./auth";
 import { logout } from "./session-actions";
 
@@ -19,6 +19,7 @@ interface Review {
     content: string;
     externalRef: string | null;
     fileName: string | null;
+    originalAvailable: boolean;
   };
   extraction: {
     id: string;
@@ -79,6 +80,11 @@ export default async function OperationsPage({
           <label>e-Avrop-länk<input name="url" type="url" placeholder="https://www.e-avrop.com/..." required /></label>
           <button type="submit">Hämta från e-Avrop</button>
           <small>Staffan loggar in, hämtar avropstext och bilagor och skickar materialet till samma granskning som övriga källor.</small>
+        </form>
+        <form action={importEavropEmail} className="portal-form">
+          <label>Avropsmail<textarea name="rawEmail" rows={6} required /></label>
+          <button type="submit">Importera e-Avrop-länk från mail</button>
+          <small>Manuell reservväg. Inkommande mail kan även vidarebefordras direkt till mailbox-ingressen. Endast en giltig e-Avrop-länk köas.</small>
         </form>
         <form action={importText}>
           <label>Extern referens<input name="externalRef" /></label>
@@ -167,6 +173,17 @@ function ReviewPanel({ review }: { review: Review }) {
       <div className="review-grid">
         <article>
           <h3>Råkälla {review.artifact.fileName === null ? "" : `– ${review.artifact.fileName}`}</h3>
+          {review.artifact.originalAvailable ? (
+            <p>
+              <a
+                href={`/api/call-offs/reviews/${review.extraction.id}/original`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Öppna PDF-original för kontroll
+              </a>
+            </p>
+          ) : null}
           <pre>{review.artifact.content}</pre>
         </article>
         <form action={approveCallOff}>

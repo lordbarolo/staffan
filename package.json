@@ -15,6 +15,7 @@
     "db:smoke": "pnpm --filter @staffan/db verify",
     "db:up": "docker compose up -d --wait postgres",
     "dev": "pnpm --filter @staffan/core build && pnpm --filter @staffan/ingress build && pnpm --filter @staffan/db build && pnpm --parallel --filter @staffan/api --filter @staffan/web dev",
+    "e2e:browser": "pnpm --filter @staffan/ingress e2e:browser",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "pnpm --filter @staffan/core build && pnpm --filter @staffan/ingress build && pnpm --filter @staffan/db build && pnpm --recursive typecheck"

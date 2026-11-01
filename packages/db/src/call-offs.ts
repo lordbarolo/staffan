@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
-import { callOffApprovalSchema, type CallOff, type CallOffApproval, type RawArtifact } from "@staffan/core";
+import { callOffApprovalSchema, callOffFieldsSchema, type CallOff, type CallOffApproval, type CallOffExtraction, type RawArtifact } from "@staffan/core";
 import type { CallOffReviewRepository, ExtractionRecord } from "@staffan/ingress";
 import { desc, eq, isNotNull, isNull } from "drizzle-orm";
 
 import { createDatabaseClient } from "./client.js";
-import { callOffExtractions, callOffs, rawArtifacts } from "./schema.js";
+import { callOffExtractions, callOffs, rawArtifactOriginals, rawArtifacts } from "./schema.js";
 
 export class ApprovalConflictError extends Error {
   constructor() {
@@ -23,7 +23,7 @@ export class ApprovalValidationError extends Error {
 }
 
 export interface ReviewRecord {
-  artifact: RawArtifact;
+  artifact: RawArtifact & { originalAvailable: boolean };
   extraction: ExtractionRecord;
 }
 
@@ -34,13 +34,28 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
   const repository: CallOffReviewRepository & {
     approve(extractionId: string, fields: CallOffApproval, approvedByOperatorId: string): Promise<CallOff>;
     close(): Promise<void>;
+    getOriginalArtifact(extractionId: string): Promise<
+      | { content: Uint8Array; fileName: string; mediaType: string; sha256: string }
+      | null
+    >;
     getReview(extractionId: string): Promise<ReviewRecord | null>;
     listReviews(): Promise<ReviewRecord[]>;
   } = {
-    async saveArtifact(artifact) {
-      await db.insert(rawArtifacts).values({
-        ...artifact,
-        receivedAt: new Date(artifact.receivedAt),
+    async saveArtifact(artifact, original) {
+      await db.transaction(async (transaction) => {
+        await transaction.insert(rawArtifacts).values({
+          ...artifact,
+          originalAvailable: original !== undefined,
+          receivedAt: new Date(artifact.receivedAt),
+        });
+        if (original !== undefined) {
+          await transaction.insert(rawArtifactOriginals).values({
+            artifactId: artifact.id,
+            content: Buffer.from(original.content),
+            sha256: original.sha256,
+            createdAt: new Date(artifact.receivedAt),
+          });
+        }
       });
     },
     async saveExtraction(record) {
@@ -64,6 +79,32 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
         .where(eq(callOffExtractions.id, extractionId))
         .limit(1);
       return rows[0] === undefined ? null : mapReview(rows[0]);
+    },
+    async getOriginalArtifact(extractionId) {
+      const rows = await db
+        .select({
+          content: rawArtifactOriginals.content,
+          fileName: rawArtifacts.fileName,
+          mediaType: rawArtifacts.mediaType,
+          sha256: rawArtifactOriginals.sha256,
+        })
+        .from(callOffExtractions)
+        .innerJoin(rawArtifacts, eq(callOffExtractions.artifactId, rawArtifacts.id))
+        .innerJoin(rawArtifactOriginals, eq(rawArtifacts.id, rawArtifactOriginals.artifactId))
+        .where(eq(callOffExtractions.id, extractionId))
+        .limit(1);
+      const original = rows[0];
+      if (original === undefined) return null;
+      const content = new Uint8Array(original.content);
+      if (createHash("sha256").update(content).digest("hex") !== original.sha256) {
+        throw new Error("Originalfilens checksumma stämmer inte");
+      }
+      return {
+        content,
+        fileName: original.fileName ?? "original.pdf",
+        mediaType: original.mediaType,
+        sha256: original.sha256,
+      };
     },
     async listReviews() {
       const rows = await db
@@ -99,6 +140,7 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
 
       const now = new Date();
       const id = randomUUID();
+      const evidence = approvalEvidence(review.extraction.extraction, validatedFields);
       const inserted = await db
         .insert(callOffs)
         .values({
@@ -109,8 +151,7 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
           status: "approved",
           fields: validatedFields,
           extractionConfidence: review.extraction.extraction.confidence,
-          fieldConfidence: review.extraction.extraction.fieldConfidence,
-          fieldProvenance: review.extraction.extraction.fieldProvenance,
+          ...evidence,
           createdAt: now,
           updatedAt: now,
         })
@@ -141,8 +182,7 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
         extractionConfidence: review.extraction.extraction.confidence,
         sourceArtifacts: [review.artifact.id],
         fields: validatedFields,
-        fieldConfidence: review.extraction.extraction.fieldConfidence,
-        fieldProvenance: review.extraction.extraction.fieldProvenance,
+        ...evidence,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
       };
@@ -153,6 +193,17 @@ export function createPostgresCallOffRepository(databaseUrl: string) {
   };
 
   return repository;
+}
+
+// The extraction stays immutable. Changed fields belong to the operator approval
+// (operator id, final fields and timestamp), not to the model's earlier evidence.
+export function approvalEvidence(extraction: CallOffExtraction, fields: CallOffApproval) {
+  const unchanged = (field: string) => Object.hasOwn(callOffFieldsSchema.shape, field) &&
+    isDeepStrictEqual(extraction[field as keyof CallOffApproval], fields[field as keyof CallOffApproval]);
+  return {
+    fieldConfidence: Object.fromEntries(Object.entries(extraction.fieldConfidence).filter(([field]) => unchanged(field))),
+    fieldProvenance: Object.fromEntries(Object.entries(extraction.fieldProvenance).filter(([field]) => unchanged(field))),
+  };
 }
 
 export function findReplayableApproval<TApproval extends {
@@ -193,6 +244,7 @@ function mapReview(row: {
       content: artifact.content,
       sha256: artifact.sha256,
       receivedAt: artifact.receivedAt.toISOString(),
+      originalAvailable: artifact.originalAvailable,
     },
     extraction: {
       id: extraction.id,

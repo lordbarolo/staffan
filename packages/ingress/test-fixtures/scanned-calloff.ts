@@ -3,6 +3,7 @@ import type { CallOffExtraction } from "@staffan/core";
 export const anonymisedScannedCallOffOcr = `
 Exempelköpings kommun söker sjuksköterska vecka 22-25 och 28-29
 Plats: Testboendet, Exempelköping
+Omfattning: en konsult
 Period 1: 2027-05-31 till 2027-06-27, arbetsveckor 22, 23, 24, 25
 Arbetstid: dag 07-16 inklusive helg
 Period 2: 2027-07-12 till 2027-07-25, arbetsveckor 28, 29
@@ -41,7 +42,7 @@ export function expectedScannedCallOffExtraction(artifactId: string): CallOffExt
         periodEnd: "2027-06-27",
         workWeeks: [22, 23, 24, 25].map((week) => ({ year: 2027, week })),
         schedule: "Dag 07-16 inklusive helg",
-        onCall: false,
+        onCall: null,
       },
       {
         label: "Period 2",
@@ -49,12 +50,12 @@ export function expectedScannedCallOffExtraction(artifactId: string): CallOffExt
         periodEnd: "2027-07-25",
         workWeeks: [28, 29].map((week) => ({ year: 2027, week })),
         schedule: "Kväll 13-22",
-        onCall: false,
+        onCall: null,
       },
     ],
     scope: { consultantCount: 1, description: "En konsult" },
     schedule: null,
-    onCall: false,
+    onCall: null,
     introduction: null,
     mandatoryRequirements: [
       "Svensk sjuksköterskelegitimation",
@@ -105,13 +106,24 @@ export function expectedScannedCallOffExtraction(artifactId: string): CallOffExt
     otherTerms: [],
     confidence: 0.9,
     fieldConfidence: { classifiedRequirements: 0.9, periodSegments: 0.94 },
-    fieldProvenance: {
-      classifiedRequirements: [
-        { artifactId, excerpt: "Ska-krav ... Börkrav", locator: "OCR sida 1" },
-      ],
-      periodSegments: [
-        { artifactId, excerpt: "Period 1 ... Period 2", locator: "OCR sida 1" },
-      ],
-    },
+    fieldProvenance: Object.fromEntries(
+      Object.entries({
+        careProvider: "Exempelköpings kommun",
+        unit: "Testboendet",
+        role: "sjuksköterska",
+        competenceRequirements: "Svensk sjuksköterskelegitimation",
+        location: "Plats: Testboendet, Exempelköping",
+        periodSegments: "Period 1: 2027-05-31 till 2027-06-27, arbetsveckor 22, 23, 24, 25",
+        scope: "Omfattning: en konsult",
+        mandatoryRequirements: "Ska-krav",
+        preferences: "Börkrav",
+        classifiedRequirements: "Svensk sjuksköterskelegitimation. Bevis: kopia av legitimation.",
+        requiredDocuments: "Bevis: kopia av legitimation.",
+        submissionDeadline: "Sista svarsdag: 2027-04-30",
+      }).map(([field, excerpt]) => [
+        field,
+        [{ artifactId, excerpt, locator: "OCR sida 1" }],
+      ]),
+    ),
   };
 }

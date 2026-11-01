@@ -1,7 +1,7 @@
-import type { CallOffApproval } from "@staffan/core";
+import type { CallOffApproval, CallOffExtraction } from "@staffan/core";
 import { describe, expect, it } from "vitest";
 
-import { ApprovalConflictError, findReplayableApproval } from "./call-offs.js";
+import { ApprovalConflictError, approvalEvidence, findReplayableApproval } from "./call-offs.js";
 
 const fields = { sourceSystem: "e-avrop" } as CallOffApproval;
 
@@ -52,5 +52,30 @@ describe("findReplayableApproval", () => {
     expect(() => findReplayableApproval([approval], fields, "operator-2")).toThrow(
       ApprovalConflictError,
     );
+  });
+});
+
+describe("approvalEvidence", () => {
+  it("retains model provenance only for fields the operator left unchanged", () => {
+    const artifactId = "00000000-0000-4000-8000-000000000001";
+    const extraction = {
+      ...fields,
+      role: "Sjuksköterska",
+      location: "Karlstad",
+      confidence: 0.9,
+      fieldConfidence: { role: 0.9, location: 0.8 },
+      fieldProvenance: {
+        role: [{ artifactId, excerpt: "Sjuksköterska", locator: "rad 1" }],
+        location: [{ artifactId, excerpt: "Karlstad", locator: "rad 2" }],
+      },
+    } as CallOffExtraction;
+    const approved = { ...fields, role: "Läkare", location: "Karlstad" } as CallOffApproval;
+
+    expect(approvalEvidence(extraction, approved)).toEqual({
+      fieldConfidence: { location: 0.8 },
+      fieldProvenance: {
+        location: [{ artifactId, excerpt: "Karlstad", locator: "rad 2" }],
+      },
+    });
   });
 });

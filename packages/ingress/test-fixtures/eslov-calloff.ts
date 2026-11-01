@@ -126,7 +126,10 @@ export function expectedEslovExtraction(artifactId: string, completeDocument: bo
     fieldProvenance: {
       careProvider: provenance("Beställare: Eslövs kommun", "sida 1, Ifylls av Kund"),
       unit: provenance("Enhet: Sjuksköterskeenheten", "sida 1, Ifylls av Kund"),
-      requester: provenance("Telefon och två e-postadresser", "sida 1, Ifylls av Kund"),
+      requester: provenance(
+        "Telefon: 000-000 00 00\nE-post: bestallare1@example.invalid bestallare2@example.invalid",
+        "sida 1, Ifylls av Kund",
+      ),
       role: provenance("Avropsförfrågan Sjuksköterska", "sida 1, rubrik"),
       location: provenance("Kvarngatan 7 24139 Eslöv", "sida 1, Uppdragsadress"),
       periodStart: provenance("250623", "sida 1, Startdatum"),
@@ -136,20 +139,24 @@ export function expectedEslovExtraction(artifactId: string, completeDocument: bo
         completeDocument ? "sida 3, Ifylls av beställare" : "sida 1, ikryssat krav",
       ),
       schedule: provenance(
-        completeDocument ? "arbete var 3:e helg, merparten på dagen, några kvällspass" : "enligt bifogad blankett",
+        completeDocument ? "arbete var 3:e helg, merparten på dagen men det kan finnas några kvällspass" : "enligt bifogad blankett",
         completeDocument ? "sida 3, Ifylls av beställare" : "sida 1, ikryssat krav",
       ),
       mandatoryRequirements: provenance("Ikryssade kompetenskrav", "sida 1"),
+      competenceRequirements: provenance(
+        "Utbildning/erfarenhet hemsjukvård inom SÄBO/korttidsboende",
+        "sida 1, kompetenskrav",
+      ),
       ...(completeDocument
         ? {
             requiredDocuments: provenance(
-              "CV, referenser, utdrag av belastningsregister, legitimation och kontroller",
+              "CV, referenser, utdrag av belastningsregister, bevis på giltig legitimation samt dokumentation avseende utförd kontroll hos IVO och Socialstyrelsen",
               "sida 2, bilagekrav",
             ),
           }
         : {}),
       submissionDeadline: provenance("250319", "sida 1, Avropssvar senast"),
-      criteria: provenance("rangordnad högst och uppfyller kompetenskrav", "sida 1"),
+      criteria: provenance("rangordnad högst och uppfyller ställda kompetenskrav", "sida 1"),
       otherTerms: provenance("VOO 2024/178", "sida 1, ramavtal"),
     },
   };

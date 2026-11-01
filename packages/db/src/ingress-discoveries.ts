@@ -36,7 +36,7 @@ export interface IngressDiscoveryRepository {
   listPending(limit?: number): Promise<IngressDiscoveryRecord[]>;
   markFailed(id: string, error: string): Promise<void>;
   markInReview(id: string, extractionId: string): Promise<void>;
-  markQueued(id: string): Promise<void>;
+  markQueued(id: string): Promise<boolean>;
   markRetry(id: string, error: string): Promise<void>;
   register(discovery: EavropDiscoveredCallOff): Promise<IngressDiscoveryRecord>;
 }
@@ -108,7 +108,17 @@ export function createPostgresIngressDiscoveryRepository(
       return rows[0] === undefined ? null : mapDiscovery(rows[0]);
     },
     async markQueued(id) {
-      await updateStatus(id, "queued", null);
+      const rows = await db
+        .update(ingressDiscoveries)
+        .set({ lastError: null, status: "queued", updatedAt: new Date() })
+        .where(
+          and(
+            eq(ingressDiscoveries.id, id),
+            inArray(ingressDiscoveries.status, ["discovered", "queued"]),
+          ),
+        )
+        .returning({ id: ingressDiscoveries.id });
+      return rows.length === 1;
     },
     async claim(id) {
       const now = new Date();

@@ -24,6 +24,21 @@ services:
       timeout: 3s
       retries: 15
 
+  portal-fixture:
+    image: node:24-alpine
+    command: ["node", "/opt/test-eavrop.mjs"]
+    volumes:
+      - ./docker/test-eavrop.mjs:/opt/test-eavrop.mjs:ro
+      - ${MAILBOX_TEST_CERT_DIR:?MAILBOX_TEST_CERT_DIR is required}:/certs:ro
+    networks:
+      default:
+        aliases: [mailbox-fixture.e-avrop.com]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4101/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   migrate:
     build:
       context: .
@@ -49,6 +64,7 @@ services:
       OPERATOR_USERNAME: ${OPERATOR_USERNAME:?OPERATOR_USERNAME is required}
       OPERATOR_PASSWORD_HASH: ${OPERATOR_PASSWORD_HASH:?OPERATOR_PASSWORD_HASH is required}
       AUTH_COOKIE_SECURE: "false"
+      MAILBOX_INGRESS_TOKEN: ${MAILBOX_INGRESS_TOKEN:?MAILBOX_INGRESS_TOKEN is required}
     ports:
       - "3001:3001"
     depends_on:
@@ -61,6 +77,50 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      DATABASE_URL: postgres://staffan:staffan@postgres:5432/staffan
+      MODEL_GATEWAY_URL: http://model-gateway:4100/extract
+      MODEL_NAME: deterministic-docker-test
+      MODEL_VERSION: "1"
+      EAVROP_USERNAME: fixture-user
+      EAVROP_PASSWORD: fixture-password
+      EAVROP_BROWSER_EXECUTABLE_PATH: /opt/test-chromium.sh
+      NODE_EXTRA_CA_CERTS: /certs/cert.pem
+      WORKER_IMPORT_MAX_ATTEMPTS: "1"
+    volumes:
+      - ./docker/test-chromium.sh:/opt/test-chromium.sh:ro
+      - ${MAILBOX_TEST_CERT_DIR:?MAILBOX_TEST_CERT_DIR is required}:/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      portal-fixture:
+        condition: service_healthy
+
+  mailbox-acceptance:
+    profiles: [acceptance]
+    build:
+      context: .
+      target: api
+    command: ["node", "packages/ingress/mailbox-e2e.mjs"]
+    environment:
+      DATABASE_URL: postgres://staffan:staffan@postgres:5432/staffan
+      API_BASE_URL: http://api:3001
+      WEB_BASE_URL: http://web:3000
+      PORTAL_STATS_URL: http://portal-fixture:4101/stats
+      BROWSER_EXECUTABLE_PATH: /usr/bin/chromium
+      OPERATOR_USERNAME: ${OPERATOR_USERNAME:?OPERATOR_USERNAME is required}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?OPERATOR_PASSWORD is required}
+      MAILBOX_INGRESS_TOKEN: ${MAILBOX_INGRESS_TOKEN:?MAILBOX_INGRESS_TOKEN is required}
+    depends_on:
+      web:
+        condition: service_healthy
+      worker:
+        condition: service_started
 
   web:
     build:

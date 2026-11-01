@@ -1,6 +1,12 @@
 import type { CallOffFields, CallOffExtraction } from "@staffan/core";
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgTable, real, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, customType, index, integer, jsonb, pgTable, real, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 export const appMetadata = pgTable("app_metadata", {
   key: text("key").primaryKey(),
@@ -44,6 +50,16 @@ export const rawArtifacts = pgTable("raw_artifacts", {
   content: text("content").notNull(),
   sha256: text("sha256").notNull(),
   receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+  originalAvailable: boolean("original_available").default(false).notNull(),
+});
+
+export const rawArtifactOriginals = pgTable("raw_artifact_originals", {
+  artifactId: text("artifact_id")
+    .primaryKey()
+    .references(() => rawArtifacts.id, { onDelete: "cascade" }),
+  content: bytea("content").notNull(),
+  sha256: text("sha256").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 });
 
 export const callOffExtractions = pgTable("call_off_extractions", {
