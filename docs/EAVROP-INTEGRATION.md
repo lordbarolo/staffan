@@ -46,6 +46,10 @@ incoming mail
 
 The endpoint never follows tracking links and never approves a CallOff.
 
+Invitation links using `Invitation.aspx?projectId=...` are accepted by both
+mailbox source detection and direct import. The project ID becomes the source
+reference, so separate invitations no longer share the filename as a reference.
+
 The optional continuous path reuses the same pipeline:
 
 ```text
@@ -62,6 +66,14 @@ pg-boss schedule
 Polling never approves a CallOff. A human must still review and submit the approval form.
 
 Trusted source metadata such as `sourceSystem` and a reference derived from the portal URL overrides conflicting model output. Portal content remains untrusted source data.
+
+The OpenAI provider receives numbered source excerpts and returns references to
+those excerpts. Staffan binds each reference to the current artifact and copies
+the exact source text into `fieldProvenance`; the model no longer writes the
+quotation or artifact ID. Unknown references, empty reference lists and duplicate
+evidence fields fail extraction. The existing schema and exact-quote checks still
+apply. A matching quote is not proof that the field interpretation is correct:
+human review and visible warnings for missing field evidence remain required.
 
 ## Configuration
 
@@ -127,6 +139,25 @@ Default safety limits are 20 attachments, 10 MB per attachment, and 200,000 extr
 The integration has been exercised locally against a real e-Avrop procurement with authenticated access. The verified flow followed the procurement-document page, downloaded seven attachments, extracted content from PDF, DOCX, and XLSX material, produced a model-backed CallOff review, persisted it to PostgreSQL, and completed manual approval in the operations UI.
 
 No credentials or downloaded source documents are part of the repository. This is local functional evidence only; it is not a claim that the current commit has passed post-push GitHub Actions or a production deployment.
+
+A live retest on 2026-10-05 verified invitation URL detection, authenticated
+retrieval of seven attachments, local document parsing and extraction through the
+configured OpenAI provider. The result was `ready_for_review`, with 95 exact
+source quotations across 24 fields and two manual-review warnings (period segments
+and on-call information). This run used an in-memory repository: PostgreSQL
+persistence, the review UI and approval were not exercised. It is one live case,
+not the ten-underlay acceptance required by the build plan.
+
+A subsequent live run on the same day used the operations UI's manual mail/link
+import, the authenticated mailbox endpoint, pg-boss, the worker and PostgreSQL.
+It reached `in_review` on the first attempt and persisted `ready_for_review`.
+The browser displayed the original source text and editable extracted fields;
+reloading retained the stored result and produced no browser page errors. The
+43 source quotations matched the stored source exactly. Six missing-evidence
+warnings remained visible for human review. Redelivery through the same form
+preserved one discovery and one artifact, with zero approvals. This verifies
+manual link intake through the queue to the review UI, not a connected email
+provider, production deployment or the correctness of every extracted field.
 
 Automated coverage includes:
 

@@ -111,6 +111,29 @@ describe("e-Avrop adapter boundaries", () => {
     expect(deriveEavropExternalRef("https://www.e-avrop.com/Default.aspx")).toBeNull();
   });
 
+  it("recognizes invitation project references in email and discovery without merging projects", () => {
+    const base = "https://www.e-avrop.com/unit/e-Upphandling/leverantor/inbjudan/";
+    const first = `${base}Invitation.aspx?projectId=101`;
+    const second = `${base}Invitation.aspx?projectId=102`;
+
+    expect(deriveEavropExternalRef(first)).toBe("101");
+    expect(deriveEavropExternalRef(`${base}Invitation.aspx?ProjectID=102`)).toBe("102");
+    expect(findEavropCallOffUrlInEmail(`Underlag: ${first}`)).toBe(first);
+    expect(discoverEavropCallOffLinks([
+      { href: first }, { href: `${first}#details` }, { href: second },
+    ], base)).toEqual([
+      { sourceUrl: first, externalRef: "101" },
+      { sourceUrl: second, externalRef: "102" },
+    ]);
+    for (const url of [
+      `${base}Invitation.aspx?projectId=`,
+      `${base}InvitationInfo.aspx?projectId=101`,
+      "https://www.e-avrop.com/Login.aspx?projectId=101",
+      "https://www.e-avrop.com/AttachmentDispatcher.aspx?projectId=101",
+      "https://attacker.invalid/e-Upphandling/Invitation.aspx?projectId=101",
+    ]) expect(findEavropCallOffUrlInEmail(url)).toBeNull();
+  });
+
   it("requires both portal credentials before a browser can be started", () => {
     expect(() => new PlaywrightEavropPortalAdapter({ username: "", password: "secret" })).toThrow(
       "e-Avrop-användarnamn och lösenord måste anges",

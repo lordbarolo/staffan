@@ -280,7 +280,7 @@ export function validateEavropUrl(value: string): string {
 export function deriveEavropExternalRef(value: string): string | null {
   const url = new URL(validateEavropUrl(value));
   for (const [key, candidate] of url.searchParams) {
-    if (/^(?:id|noticeid|upphandlingid|procurementid|contractid)$/i.test(key) && candidate.trim() !== "") {
+    if (/^(?:id|noticeid|upphandlingid|procurementid|contractid|projectid)$/i.test(key) && candidate.trim() !== "") {
       return candidate.trim().slice(0, 200);
     }
   }
@@ -314,7 +314,7 @@ export function isEavropCallOffUrl(value: string) {
   if (/login\.aspx|attachmentdispatcher|invitationinfo|\/information\//i.test(target)) return false;
   const hasStableReference = [...url.searchParams].some(
     ([key, candidate]) =>
-      /^(?:id|noticeid|upphandlingid|procurementid|contractid)$/i.test(key) &&
+      /^(?:id|noticeid|upphandlingid|procurementid|contractid|projectid)$/i.test(key) &&
       candidate.trim() !== "",
   );
   const hasCallOffPath = /\/(?:calloff|notice|tender)\//i.test(url.pathname);
